@@ -1,24 +1,9 @@
-# udev rule — grants the esp32ir group access to the ESP32 IR Remote.
+# Gives the esp32ir group access to the stick, so the daemon can run
+# unprivileged. hidraw nodes are root-only by default.
 #
-# /dev/hidraw* nodes are root-only by default, which is the only reason the
-# daemon previously needed to run as root. This rule hands ownership of just
-# this one device to a dedicated group, so the daemon can run unprivileged.
+# 1209:0001 is a shared test ID (see the brief). It is one of five copies that
+# must change together; lowercase hex, no 0x.
 #
-# The idVendor/idProduct values must match DEVICE_VID/DEVICE_PID in both
-# firmware/src/main.cpp and daemon/src/main.cpp, and the two PowerShell scripts
-# under packaging/windows/. They are lowercase hex without the 0x prefix.
-#
-# 1209:0001 is pid.codes' VID for open-source hardware, with its designated
-# test PID. It is a placeholder for development — see the brief. Update all
-# five copies together when a real PID is allocated.
-#
-# Install:
-#   sudo groupadd --system esp32ir
-#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin -g esp32ir esp32ir
-#   sudo cp 99-esp32-ir-remote.rules /etc/udev/rules.d/
+# Applies on device add, so after installing, replug the stick or run:
 #   sudo udevadm control --reload-rules && sudo udevadm trigger
-#
-# Verify (with the device plugged in):
-#   ls -l /dev/hidraw*        # the ESP32's node should show group esp32ir
-#
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", GROUP="esp32ir", MODE="0660"

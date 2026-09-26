@@ -13,9 +13,7 @@
       # -----------------------------------------------------------------------
       # Development shell
       #
-      # Provides the toolchain only. The build itself is plain CMake and
-      # PlatformIO, exactly as on any other distribution — this shell is a way
-      # of acquiring the tools, not a replacement build system.
+      # The toolchain only; the build is plain CMake and PlatformIO.
       #
       #   nix develop
       #   cmake -B daemon/build -S daemon && cmake --build daemon/build
@@ -28,14 +26,12 @@
             pkg-config
             gcc
             hidapi
-            # sdbus-cpp (unsuffixed) is still 1.x in nixpkgs. LinuxPowerMonitor
-            # requires the v2 API — see the daemon dependency notes in the brief.
+            # The unsuffixed sdbus-cpp is still 1.x in nixpkgs; 2.x is required.
             sdbus-cpp_2
-            # libudev, for the device-arrival watch. Provided by systemdLibs.
+            # libudev, for the device-arrival watch.
             systemdLibs
-            # The FHS-wrapped PlatformIO. The bare platformio-core will not work:
-            # PlatformIO downloads a prebuilt xtensa-esp32s3-elf toolchain linked
-            # against /lib64/ld-linux-x86-64.so.2, which does not exist on NixOS.
+            # The FHS-wrapped PlatformIO: the ESP32 toolchain it downloads does
+            # not run on bare NixOS.
             platformio
             # Serial console for firmware debugging.
             picocom
@@ -46,22 +42,16 @@
       # -----------------------------------------------------------------------
       # Daemon package
       #
-      # Calls the project's own CMakeLists rather than reimplementing the build
-      # in Nix, so this cannot drift from what a Debian or Arch user gets.
+      # Uses the project's own CMakeLists, so it matches every other distro.
       # -----------------------------------------------------------------------
       packages = forAllSystems (pkgs: rec {
         default = esp32-ir-daemon;
 
         esp32-ir-daemon = pkgs.stdenv.mkDerivation {
           pname = "esp32-ir-daemon";
-          # Read from VERSION, the same file CMakeLists reads, so the Nix
-          # package cannot claim a version the build did not produce.
           version = nixpkgs.lib.fileContents ./VERSION;
 
-          # The build needs daemon/ plus the VERSION file above it, so the
-          # source cannot simply be ./daemon. Listing the two explicitly, rather
-          # than handing over the whole repository, keeps 13MB of CAD out of the
-          # store and stops an enclosure tweak from rebuilding the daemon.
+          # Only daemon/ and VERSION, so CAD changes do not rebuild the daemon.
           src = nixpkgs.lib.fileset.toSource {
             root = ./.;
             fileset = nixpkgs.lib.fileset.unions [ ./daemon ./VERSION ];
@@ -71,16 +61,8 @@
           nativeBuildInputs = with pkgs; [ cmake pkg-config ];
           buildInputs = with pkgs; [ hidapi sdbus-cpp_2 systemdLibs ];
 
-          # No installPhase — the CMakeLists now carries install() rules, so the
-          # default cmake hook does the right thing with CMAKE_INSTALL_PREFIX
-          # set to $out: the binary to $out/bin (which lib.getExe resolves via
-          # mainProgram) and the udev rule to $out/lib/udev/rules.d, exactly
-          # where services.udev.packages looks for it.
-          #
-          # The unit file installed alongside is unused here — the NixOS module
-          # below declares the service natively — but it costs nothing and
-          # keeping one install path shared with every other distribution is the
-          # whole point.
+          # CMake's install rules put the udev rule where services.udev.packages
+          # finds it. The unit file it also installs is unused here.
 
           meta = with pkgs.lib; {
             description = "Mirrors PC power state to a TV over IR, as a CEC alternative";
@@ -95,9 +77,7 @@
       # -----------------------------------------------------------------------
       # NixOS module
       #
-      # Replaces the manual install steps documented for FHS distributions:
-      # the service account, udev rule and unit file are all declared here, so
-      # they survive a nixos-rebuild (useradd/groupadd would not).
+      # Declares the service account, udev rule and service.
       #
       #   imports = [ inputs.esp32-ir-remote.nixosModules.default ];
       #   services.esp32-ir-remote.enable = true;
@@ -124,14 +104,11 @@
               description = "ESP32 IR Remote daemon";
             };
 
-            # Ships 99-esp32-ir-remote.rules, granting the esp32ir group access
-            # to the device's hidraw node.
             services.udev.packages = [ cfg.package ];
 
             systemd.services.esp32-ir-remote = {
               description = "ESP32 IR Remote Daemon";
-              # Mirrors esp32-ir-remote.service — dbus.socket ordered explicitly
-              # so the daemon cannot lose the race to the system bus at boot.
+              # Mirrors esp32-ir-remote.service.in; keep the two in step.
               after = [ "dbus.socket" "systemd-logind.service" ];
               requires = [ "systemd-logind.service" ];
               wantedBy = [ "multi-user.target" ];
@@ -145,8 +122,6 @@
                 User = "esp32ir";
                 Group = "esp32ir";
 
-                # Mirrors the hardening in esp32-ir-remote.service. If the daemon
-                # ever cannot reach D-Bus, relax ProtectSystem first.
                 NoNewPrivileges = true;
                 ProtectSystem = "strict";
                 ProtectHome = true;
@@ -158,7 +133,7 @@
                 LockPersonality = true;
                 MemoryDenyWriteExecute = true;
                 SystemCallArchitectures = "native";
-                # AF_NETLINK is required by the udev monitor — see the unit file.
+                # AF_NETLINK is needed by the udev watch; see the unit file.
                 RestrictAddressFamilies = [ "AF_UNIX" "AF_NETLINK" ];
                 DeviceAllow = [ "char-hidraw rw" ];
               };

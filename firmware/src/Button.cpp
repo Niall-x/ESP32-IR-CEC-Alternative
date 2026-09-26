@@ -8,7 +8,6 @@ void Button::begin() {
 }
 
 void Button::update() {
-
     bool raw = pullup_ ? (digitalRead(pin_) == LOW) : (digitalRead(pin_) == HIGH);
 
     if (raw != lastRaw_) {
@@ -30,17 +29,13 @@ void Button::update() {
         uint32_t held   = millis() - pressTime_;
 
         if (held < HoldTimings::PRESS_MAX_MS) {
-
             if (onPress) onPress();
         } else if (held < HoldTimings::CONFIG_MS) {
-
             if (onHoldCancelled) onHoldCancelled();
         } else if (!resetFired_) {
             if (held < HoldTimings::RESET_START_MS) {
-
                 if (onConfigThreshold) onConfigThreshold();
             } else {
-
                 if (onHoldCancelled) onHoldCancelled();
             }
         }
@@ -52,7 +47,6 @@ void Button::update() {
         uint32_t held = millis() - pressTime_;
 
         if (held >= HoldTimings::PRESS_MAX_MS) {
-
             if (onHold) onHold(held);
 
             if (held >= HoldTimings::RESET_END_MS && !resetFired_) {

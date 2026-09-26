@@ -13,7 +13,6 @@ struct udev_device;
 
 class LinuxPowerMonitor : public IPowerMonitor {
 public:
-
     LinuxPowerMonitor(uint16_t vid, uint16_t pid);
     ~LinuxPowerMonitor() override;
 
@@ -24,7 +23,6 @@ public:
     void run() override;
 
 private:
-
     bool takeInhibitorLock();
 
     void releaseInhibitorLock();

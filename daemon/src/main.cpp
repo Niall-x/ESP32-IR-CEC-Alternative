@@ -92,14 +92,12 @@ static void redirectLogsToFile() {
 #endif
 
 int main() {
-
     std::cout << std::unitbuf;
 
 #ifdef _WIN32
 
     const bool console = consoleMode();
     if (console) {
-
         SetConsoleOutputCP(CP_UTF8);
     } else {
         redirectLogsToFile();

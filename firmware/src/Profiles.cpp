@@ -10,16 +10,8 @@ struct DefaultProfile {
     bool        visible;
 };
 
-// Discrete power codes, derived from irdb's protocol/device/OBC parameters via
-// the same encoder IRremoteESP8266 uses. Provenance and how to find more is in
-// the brief, §4 "Where IR codes come from".
-//
-// Every profile here transmits. A brand only earns a place once a discrete
-// on/off pair exists that covers the line rather than one model — so TCL and
-// Hisense are absent, not blank: TCL publishes only a power toggle, in a
-// protocol this firmware does not speak, and Hisense is not in irdb at all.
-// Users of those TVs add a profile through the web UI, which is a better answer
-// than a factory default that cannot work.
+// Discrete power codes. Where they came from, and why TCL and Hisense are
+// absent, is in the brief under "Where IR codes come from".
 static const DefaultProfile DEFAULT_PROFILES[] = {
     { "LG",      "NEC",     0x20DF23DC, 0x20DFA35C, true },
     { "Samsung", "SAMSUNG", 0xE0E09966, 0xE0E019E6, true },
@@ -118,7 +110,6 @@ static void loadProfiles() {
     }
 
     for (JsonObjectConst obj : doc.as<JsonArrayConst>()) {
-
         if (profiles_.size() >= Profiles::MAX_PROFILES) {
             Serial.printf("[profiles] Ignoring profiles beyond the %u cap\n",
                           (unsigned)Profiles::MAX_PROFILES);
@@ -155,9 +146,7 @@ static void loadSettings() {
 }
 
 namespace Profiles {
-
 bool begin() {
-
     if (!LittleFS.begin(true)) {
         Serial.println("[profiles] LittleFS mount failed — running on fallback profile");
         return false;
@@ -191,7 +180,6 @@ bool begin() {
 const std::vector<Profile>& getAll()     { return profiles_; }
 
 const Profile& getActive() {
-
     static const Profile FALLBACK = profileFromDefault(DEFAULT_PROFILES[0]);
 
     if (profiles_.empty()) return FALLBACK;

@@ -63,9 +63,7 @@ void Display::showHoldBar(uint32_t heldMs, bool enteringWifi) {
     if (!ok_) return;
     timerActive_ = false;
 
-    // One block per second held, so the bar can be counted rather than just
-    // watched: four blocks means four seconds. The block count comes from the
-    // threshold itself, so changing CONFIG_MS keeps the two in step.
+    // One block per second, derived from the threshold so the two stay in step.
     constexpr uint8_t BLOCKS = HoldTimings::CONFIG_MS / 1000;
 
     uint8_t filled = (uint8_t)(heldMs / 1000);
@@ -203,7 +201,6 @@ void Display::drawStatus(const String& profileName) {
     oled_.setTextColor(SSD1306_WHITE);
 
     if (wifiActive_) {
-
         oled_.setCursor(0, 0);
         oled_.print("Profile: ");
         oled_.print(profileName);
@@ -214,7 +211,6 @@ void Display::drawStatus(const String& profileName) {
         oled_.setCursor(0, 22);
         oled_.print(wifiIP_);
     } else {
-
         oled_.setCursor(0, 12);
         oled_.print("Profile: ");
         oled_.print(profileName);

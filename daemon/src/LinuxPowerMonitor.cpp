@@ -15,7 +15,6 @@ static constexpr auto LOGIND_INTERFACE = "org.freedesktop.login1.Manager";
 
 LinuxPowerMonitor::LinuxPowerMonitor(uint16_t vid, uint16_t pid)
     : vid_(vid), pid_(pid) {
-
     connection_ = sdbus::createSystemBusConnection();
 
     proxy_ = sdbus::createProxy(*connection_,
@@ -58,13 +57,12 @@ void LinuxPowerMonitor::assertTv(bool on, const char* reason) {
     try {
         (void)onCommand_(TvCommand{on, reason});
     } catch (...) {
-
+        // A failed send must never stop the machine sleeping or shutting down.
     }
 }
 
-// Each step is reported by name. The netlink socket is the one that fails in
-// practice, and it fails because of the unit's sandbox rather than anything
-// wrong with the machine — so the message says where to look.
+// Each step reports its own failure. The netlink socket is the one that fails in
+// practice, because of the unit's sandbox, so its message says where to look.
 bool LinuxPowerMonitor::startDeviceWatch() {
     udev_ = udev_new();
     if (!udev_) {
@@ -181,7 +179,6 @@ void LinuxPowerMonitor::run() {
 }
 
 bool LinuxPowerMonitor::takeInhibitorLock() {
-
     try {
         sdbus::UnixFd fd;
         proxy_->callMethod("Inhibit")
@@ -197,7 +194,6 @@ bool LinuxPowerMonitor::takeInhibitorLock() {
         std::cout << "[inhibitor] Lock acquired\n";
         return true;
     } catch (const std::exception& e) {
-
         std::cerr << "[inhibitor] Failed to acquire lock: " << e.what()
                   << " — sleep and shutdown will not be delayed\n";
         return false;

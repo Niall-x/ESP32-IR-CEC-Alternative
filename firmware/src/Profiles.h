@@ -24,7 +24,6 @@ struct Settings {
 };
 
 namespace Profiles {
-
     static constexpr size_t MAX_PROFILES = 32;
 
     bool begin();

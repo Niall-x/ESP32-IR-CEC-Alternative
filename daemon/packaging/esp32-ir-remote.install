@@ -1,8 +1,4 @@
-# pacman hooks for esp32-ir-remote.
-#
-# Deliberately does *not* run `systemctl enable --now`, unlike the .deb and .rpm
-# postinst. Arch packaging policy leaves enabling services to the user, so this
-# only creates the account the unit needs and says what to do next.
+# pacman hooks. Does not enable the service: Arch leaves that to the user.
 
 post_install() {
     if ! getent group esp32ir >/dev/null; then

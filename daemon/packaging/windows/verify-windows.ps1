@@ -1,23 +1,9 @@
-# Captures what a Windows machine is and what the daemon is doing on it.
+# Writes a report of what a Windows machine is and what the daemon did on it,
+# so results from different machines can be compared. Changes nothing.
 #
-# The daemon behaves the same way on every machine — the TV follows the console
-# display state — but a machine's sleep model still decides which events appear
-# in the log, and it is a property of the platform firmware that cannot be
-# changed. So evidence arrives from different machines on different days, and
-# what makes it add up to a verification record rather than a pile of anecdotes
-# is that each machine reports itself the same way.
+#   powershell -ExecutionPolicy Bypass -File .\verify-windows.ps1 [-Report <path>]
 #
-# That is all this does: read the state, write it down in a fixed order, and
-# save it next to the log. It changes nothing.
-#
-#   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-#   .\verify-windows.ps1
-#   .\verify-windows.ps1 -Report C:\temp\desktop-s3.txt
-#
-# Does not need elevation to read most of this, but the service configuration
-# and the device registry values are not readable without it — run it elevated
-# and it reports everything, run it unprivileged and it says which parts it
-# could not see rather than reporting them as absent.
+# Run elevated to include the service configuration and device registry values.
 
 [CmdletBinding()]
 param(
@@ -25,11 +11,9 @@ param(
     [string]$VendorId    = "1209",
     [string]$ProductId   = "0001",
 
-    # Where to write a copy. Defaults to the log directory, so the report and
-    # the log it refers to stay together.
+    # Defaults to the log directory.
     [string]$Report,
 
-    # How much of the daemon log to include.
     [int]$LogLines = 60
 )
 
@@ -63,10 +47,8 @@ Say ""
 
 # --- 1. What kind of machine is this ----------------------------------------
 #
-# The daemon no longer branches on the sleep model — the TV follows the display
-# state on every machine — but the model still explains which events to expect
-# in the log: an absent PBT_APMSUSPEND is normal on a Modern Standby laptop and
-# a defect on an S3 desktop.
+# The sleep model explains which events to expect: no PBT_APMSUSPEND is normal
+# on a Modern Standby laptop and a defect on an S3 desktop.
 Say "== Power model =="
 Say ""
 Say "powercfg /a:"
@@ -89,8 +71,6 @@ if ($null -ne $hiberboot) {
     $state = if ($hiberboot -eq 1) { "on" } else { "off" }
     Say "Fast Startup (HiberbootEnabled): $state"
 } else {
-    # Absent is not the same as off — the documented default is enabled wherever
-    # hibernation is available.
     Say "Fast Startup (HiberbootEnabled): value absent (defaults to on where hibernate exists)"
 }
 Say ""
@@ -142,10 +122,7 @@ if ($devices.Count -eq 0) {
 }
 Say ""
 
-# The selective-suspend values the installer writes. Per-instance, so a
-# different physical unit gets Windows' defaults back — which is exactly the
-# kind of thing that turns into an intermittent failure nobody connects to
-# having swapped the board.
+# The selective-suspend values the installer writes, per device instance.
 if ($elevated) {
     Say "  Selective suspend (per device instance):"
     $enumRoot = "HKLM:\SYSTEM\CurrentControlSet\Enum\USB"
@@ -182,9 +159,7 @@ Say ""
 
 # --- 5. What still needs doing by hand --------------------------------------
 #
-# Listed rather than checked, because none of it can be read out of the
-# registry: every row needs somebody to put the machine into a state and watch
-# what the TV does.
+# Things only a person watching the TV can check.
 Say "== Manual checks — record the result against this machine =="
 Say ""
 Say "  [ ] Boot            TV comes on, log shows 'display state = on' at registration"
@@ -192,8 +167,10 @@ Say "  [ ] Display timeout TV off when the screen blanks — on every machine"
 Say "  [ ] Sleep           TV off; log shows the suspend send and how long it took"
 Say "  [ ] Wake            TV on; check whether the ESP32 re-enumerated (arrival line)"
 Say "  [ ] Hibernate       as sleep, but 'away for' should show the real elapsed time"
-Say "  [ ] Resume from hib TV on, and the device arrival re-assert lands"
-Say "  [ ] Shutdown        TV off before the machine goes; preshutdown gives minutes"
+Say "  [ ] Resume from hib TV on when the display comes back"
+Say "  [ ] Shutdown        TV off before the machine goes (preshutdown allows 60s)"
+Say "  [ ] Unplugged       shutdown is not delayed with the stick removed"
+Say "  [ ] Replug          TV does not change when the stick is replugged later"
 Say "  [ ] Unattended wake TV stays OFF — this is the 3am case, and the one that"
 Say "                      is wrong if PBT_APMRESUMEAUTOMATIC is ever acted on"
 Say ""
@@ -204,8 +181,7 @@ try {
     if ($dir -and -not (Test-Path $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
-    # UTF8 to match what the daemon writes, so the report and the log excerpt
-    # inside it do not disagree about how an em-dash is encoded.
+    # UTF8, to match the daemon's log.
     $out | Out-File -FilePath $Report -Encoding UTF8
     Write-Host ""
     Write-Host "Report written to $Report"

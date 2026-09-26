@@ -1,18 +1,10 @@
 #!/bin/sh
-# Post-install hook — shared by the .deb and the .rpm.
-#
-# The two package managers call this with different arguments (dpkg passes
-# "configure", rpm passes 1 for install and 2 for upgrade), so nothing here
-# inspects $1. Every step is idempotent instead, which makes the script correct
-# under both conventions and safe to re-run on upgrade.
-#
-# This is the packaged form of the manual install sequence in the brief.
+# Post-install hook, shared by the .deb and the .rpm. dpkg and rpm pass
+# different arguments, so nothing here reads $1; every step is safe to re-run.
 
 set -e
 
-# The service account. Created without a home directory or login shell — it
-# exists only to own the daemon process and to be granted the hidraw device by
-# 99-esp32-ir-remote.rules.
+# The account the service runs as. No home, no login shell.
 if ! getent group esp32ir >/dev/null; then
     groupadd --system esp32ir
 fi
@@ -22,12 +14,8 @@ if ! getent passwd esp32ir >/dev/null; then
             --gid esp32ir --comment "ESP32 IR Remote daemon" esp32ir
 fi
 
-# udev evaluates rules on device *add* events, so reloading is not enough to
-# affect a device that is already plugged in — that node keeps the ownership it
-# was created with. `trigger --action=add` re-runs the rules against existing
-# hidraw devices, which covers the common case of installing the package with
-# the ESP32 already connected. Failure is not fatal: replugging the device
-# achieves the same thing.
+# Re-applies the rule to a stick that is already plugged in. Replugging does
+# the same, so a failure here is not fatal.
 if command -v udevadm >/dev/null; then
     udevadm control --reload-rules || true
     udevadm trigger --subsystem-match=hidraw --action=add || true
@@ -36,9 +24,8 @@ fi
 if command -v systemctl >/dev/null; then
     systemctl daemon-reload || true
 
-    # Enabling starts the daemon, which sends ON to the TV — correct, since the
-    # PC is by definition running. If the ESP32 is not plugged in the daemon
-    # exits and systemd retries every 5s until it appears.
+    # Starting the daemon on an already-running system does not touch the TV:
+    # the boot ON is only sent in the first three minutes after boot.
     systemctl enable --now esp32-ir-remote.service || true
 fi
 

@@ -1,15 +1,8 @@
 name: Packages
 
-# Builds the .deb and .rpm. Both are produced in containers rather than on the
-# runner directly, for two reasons:
-#
-#   1. CPack shells out to dpkg-deb and rpmbuild, so each package can only be
-#      built on a host that has that tool.
-#   2. sdbus-c++ 2.x is the hard constraint. The base image has to be one that
-#      actually ships it — see the comment on each job.
-#
-# Arch is absent on purpose: packaging/PKGBUILD builds on the user's own machine,
-# so there is nothing for CI to produce.
+# Every push: compile the daemon on Linux and Windows.
+# A v* tag: also build the .deb and .rpm and publish a public GitHub Release.
+# Packages are built in containers that ship sdbus-c++ 2.x.
 
 on:
   push:
@@ -19,13 +12,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  # Compile-only, on every push rather than on tags.
-  #
-  # The Windows sources went a long time never having been compiled even once,
-  # and nothing would have noticed if they stopped compiling — the packaging
-  # jobs below only run on a v* tag, and neither of them touches Windows. This
-  # produces no artifact on purpose: its whole job is to fail loudly when the
-  # half of the tree that nobody builds locally stops building.
   windows-build:
     runs-on: windows-latest
     steps:
@@ -43,9 +29,6 @@ jobs:
       - name: Build
         run: cmake --build daemon/build --config Release
 
-  # Compile-only for Linux, for the same reason: the packaging jobs prove the
-  # tree builds only at release time, which is the worst moment to find out it
-  # does not.
   linux-build:
     runs-on: ubuntu-latest
     container: debian:trixie
@@ -64,9 +47,7 @@ jobs:
   deb:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    # debian:trixie carries sdbus-c++ 2.1.0. Note this cannot be built on the
-    # bare ubuntu-latest runner: Ubuntu 24.04 LTS still ships 1.4.0, and the
-    # find_package(sdbus-c++ 2.0 REQUIRED) guard rejects it at configure time.
+    # Not the bare runner: Ubuntu 24.04 still ships sdbus-c++ 1.x.
     container: debian:trixie
     steps:
       - uses: actions/checkout@v4
@@ -87,8 +68,6 @@ jobs:
         run: cpack -G DEB --config daemon/build/CPackConfig.cmake -B daemon/build
 
       - name: Inspect the package
-        # Cheap sanity check that beats discovering a bad layout after release:
-        # prints the declared dependencies and the full file list.
         run: |
           dpkg-deb --info    daemon/build/*.deb
           dpkg-deb --contents daemon/build/*.deb
@@ -101,10 +80,8 @@ jobs:
   rpm:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    # Rawhide, not a stable Fedora — Fedora 42 ships sdbus-c++ 1.5.0, which the
-    # daemon cannot build against. 2.x landed for F44. Until that is a stable
-    # release this job tracks rawhide and the resulting .rpm is installable only
-    # on F44+, so treat it as a preview rather than a supported artifact.
+    # Rawhide, because stable Fedora still ships sdbus-c++ 1.x. The .rpm needs
+    # Fedora 44 or newer, so treat it as a preview.
     container: fedora:rawhide
     continue-on-error: true
     steps:

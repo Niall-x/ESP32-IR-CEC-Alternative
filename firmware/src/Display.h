@@ -8,7 +8,6 @@
 
 class Display {
 public:
-
     std::function<void()> onExpire;
 
     Display(Adafruit_SSD1306& oled);

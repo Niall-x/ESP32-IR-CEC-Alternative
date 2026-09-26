@@ -1,38 +1,25 @@
-# Template — CMake substitutes @CMAKE_INSTALL_FULL_BINDIR@ at configure time and
-# writes the result into the build directory. Edit this file, never the
-# generated one. Hardcoding the path here would be wrong for at least one of the
-# two prefixes in play: /usr/local for a hand `cmake --install`, /usr for a
-# distribution package.
+# Template: CMake fills in @CMAKE_INSTALL_FULL_BINDIR@. Edit this file, never
+# the generated one.
 
 [Unit]
 Description=ESP32 IR Remote Daemon
-# Must start after logind is running — we connect to it over D-Bus at startup.
-# dbus.socket is ordered explicitly too: without it the daemon can win the race
-# against the system bus at boot, fail to connect, exit 1, and only recover on
-# the next Restart= attempt — turning the TV on several seconds late.
+# dbus.socket as well as logind, or the daemon can beat the system bus at boot,
+# fail, and only recover on the next restart, turning the TV on late.
 After=dbus.socket systemd-logind.service
 Requires=systemd-logind.service
 
 [Service]
 Type=simple
 ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/esp32-ir-daemon
-# Restart on unexpected exit (e.g. serial port disconnected).
-# Does not restart on clean exit (e.g. systemd stopping the service for shutdown).
 Restart=on-failure
 RestartSec=5
 
-# Run unprivileged. The daemon only needs to open the ESP32's /dev/hidraw node
-# and talk to logind on the system bus — neither requires root once
-# 99-esp32-ir-remote.rules has granted the esp32ir group access to the device.
-# The account is created by packaging/postinst when installed from a package,
-# or by hand per the install steps in the brief.
+# Unprivileged. 99-esp32-ir-remote.rules gives the esp32ir group the device.
 User=esp32ir
 Group=esp32ir
 
 # --- Sandboxing ---
-# The daemon reads no files, writes nothing, and makes no network connections,
-# so almost everything can be closed off. If the daemon ever fails to reach
-# D-Bus after a change here, ProtectSystem is the first directive to relax.
+# The daemon reads no files, writes nothing and uses no network.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -44,15 +31,11 @@ RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
-# AF_UNIX for the D-Bus system bus socket; AF_NETLINK for the udev monitor,
-# which is how the daemon is told the ESP32 has appeared. Dropping AF_NETLINK
-# does not fail loudly — the daemon starts, logs one line, and silently loses
-# the ON at boot.
+# AF_UNIX for D-Bus; AF_NETLINK for the udev watch. Without AF_NETLINK nothing
+# fails loudly: the daemon starts, logs one line, and loses the ON at boot.
 RestrictAddressFamilies=AF_UNIX AF_NETLINK
-# Setting DeviceAllow implies DevicePolicy=closed, restricting the daemon to
-# hidraw plus the standard pseudo-devices (null, zero, random, urandom, tty).
+# Limits device access to hidraw plus the standard pseudo-devices.
 DeviceAllow=char-hidraw rw
 
 [Install]
-# Start automatically when the system reaches the normal multi-user state
 WantedBy=multi-user.target

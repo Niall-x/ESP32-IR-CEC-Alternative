@@ -11,14 +11,8 @@
 
 static constexpr size_t REPORT_SIZE = 64;
 
-// One timeout covers a whole send: opening, any retried write, and the ACK.
-//
-// It is a single constant rather than a per-event budget because the only
-// number that ever mattered was "long enough for a device that is present to
-// answer". A healthy round trip is comfortably under 200ms, and every deadline
-// the OS imposes on us — logind's 5s inhibitor delay, the ~2s Windows allows
-// after announcing a suspend, the 60s preshutdown timeout the installer sets —
-// is longer than this. There is nothing left for the caller to tune.
+// One timeout for a whole send: opening, any retried write, and the ACK. A
+// healthy round trip is under 200ms, and no OS deadline is shorter than this.
 static constexpr auto SEND_TIMEOUT = std::chrono::milliseconds(2000);
 
 static constexpr auto OPEN_POLL = std::chrono::milliseconds(100);
@@ -65,7 +59,6 @@ void HIDTransport::closeDevice() {
 
 void HIDTransport::invalidate() {
     if (!dev_) {
-
         std::cout << "[transport] Device removal reported; no handle was open\n";
         return;
     }
@@ -112,7 +105,6 @@ hid_device* HIDTransport::openMatching() {
                   << narrow(EXPECTED_PRODUCT) << "\"\n";
         opened = hid_open_path(chosen->path);
     } else {
-
         std::cerr << "[transport] None identifies as \"" << narrow(EXPECTED_PRODUCT)
                   << "\" — falling back to the first match, which may not be"
                      " the ESP32\n";
@@ -123,10 +115,8 @@ hid_device* HIDTransport::openMatching() {
     return opened;
 }
 
-
-// One attempt, no waiting. If nothing enumerates there is nothing to wait for,
-// and waiting is exactly what would delay a sleep or shutdown on a machine
-// where the stick simply is not plugged in.
+// One attempt, no waiting: with the stick unplugged, waiting would only delay
+// sleep and shutdown.
 bool HIDTransport::ensureOpen() {
     if (dev_) return true;
 
@@ -138,9 +128,8 @@ bool HIDTransport::ensureOpen() {
     return true;
 }
 
-// Waiting *is* worth it here, because this is only called after a handle we
-// already had stopped working: the device demonstrably exists, so the most
-// likely explanation is that it is re-enumerating and will be back shortly.
+// Only called after an open handle stopped working, so the device exists and is
+// probably re-enumerating. Worth waiting for.
 bool HIDTransport::reopenBefore(TimePoint deadline) {
     while (!ensureOpen()) {
         if (Clock::now() + OPEN_POLL >= deadline) return false;
@@ -152,7 +141,6 @@ bool HIDTransport::reopenBefore(TimePoint deadline) {
 void HIDTransport::drainInput() {
     uint8_t scratch[REPORT_SIZE];
     for (int i = 0; i < MAX_DRAIN_REPORTS; ++i) {
-
         if (hid_read_timeout(dev_, scratch, sizeof(scratch), 0) <= 0) return;
     }
     std::cerr << "[transport] Input queue still not empty after draining "
@@ -165,7 +153,6 @@ uint8_t HIDTransport::nextSequence() {
 }
 
 bool HIDTransport::send(const std::string& cmd) {
-
     const TimePoint deadline = Clock::now() + SEND_TIMEOUT;
 
     if (!ensureOpen()) {
@@ -211,7 +198,6 @@ bool HIDTransport::send(const std::string& cmd) {
 }
 
 bool HIDTransport::awaitAck(uint8_t seq, const std::string& cmd, TimePoint deadline) {
-
     while (true) {
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
             deadline - Clock::now());
@@ -222,7 +208,6 @@ bool HIDTransport::awaitAck(uint8_t seq, const std::string& cmd, TimePoint deadl
                                          static_cast<int>(remaining.count()));
 
         if (res < 0) {
-
             std::cerr << "[transport] Read failed (" << narrow(hid_error(dev_))
                       << ") — dropping device handle\n";
             closeDevice();

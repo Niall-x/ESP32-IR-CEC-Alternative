@@ -33,21 +33,8 @@
 #define WIFI_SSID  "ESP32-IR-Remote"
 #define WIFI_PASS  "irremote123"
 
-// Hardware watchdog. Reboots the device if loop() ever stops running.
-//
-// This is the one failure the device has no other defence against: nothing on
-// the PC side can tell a hung stick from an unplugged one, so a hang would
-// persist until somebody noticed the TV had stopped following the PC. A reset
-// is a clean recovery — profiles live in flash and the daemon reopens the
-// device on its next send.
-//
-// 20s is sized by the web server, not by anything in our own code. Serving the
-// config page can legitimately block for around 12s inside a single loop()
-// iteration if a client stalls: WebServer waits up to 5s for the request, 5s
-// for data to be ACKed and 2s for the close. Everything else in loop() —
-// button, display, IR, HID — is under 200ms. The margin matters more than fast
-// detection here, because a false reset while somebody is saving IR codes over
-// the web UI would be worse than a slow one.
+// Reboots the stick if loop() stops running. Sized by the web server, which can
+// legitimately block for ~12s when a browser stalls mid-request.
 #define WDT_TIMEOUT_SECONDS 20
 
 static const uint8_t REPORT_DESCRIPTOR[] = {
@@ -92,7 +79,6 @@ public:
     }
 
     void _onOutput(uint8_t report_id, const uint8_t* buffer, uint16_t len) override {
-
         if (len < 2) return;
 
         uint16_t copyLen = min((int)len, REPORT_SIZE - 1);
@@ -114,14 +100,13 @@ VendorHID hidDevice;
 volatile bool usbResumePending = false;
 volatile bool usbWasSuspended  = false;
 
-static void onUsbEvent(void* , esp_event_base_t ,
-                       int32_t id, void* ) {
+static void onUsbEvent(void*, esp_event_base_t,
+                       int32_t id, void*) {
     switch (id) {
     case ARDUINO_USB_SUSPEND_EVENT:
         usbWasSuspended = true;
         break;
     case ARDUINO_USB_RESUME_EVENT:
-
         if (usbWasSuspended) {
             usbWasSuspended  = false;
             usbResumePending = true;
@@ -308,10 +293,8 @@ void onButtonPress() {
 
     if (wifiActive) {
         if (pressCount == 1) {
-
             display.showStatus(Profiles::getActive().name, true);
         } else {
-
             display.showWifiLockMessage();
             pressCount = 1;
         }
@@ -319,10 +302,8 @@ void onButtonPress() {
     }
 
     if (pressCount == 1) {
-
         display.showStatus(Profiles::getActive().name, alwaysOn);
     } else {
-
         int next = Profiles::nextVisibleIndex();
         Profiles::getMutableSettings().activeProfile = next;
         Profiles::saveSettings();
@@ -333,11 +314,10 @@ void onButtonPress() {
 }
 
 void onButtonHold(uint32_t heldMs) {
-
     pressCount = 0;
 
     if (heldMs >= HoldTimings::RESET_END_MS) {
-
+        // The reset has fired and put the status screen up; leave it there.
         return;
     } else if (heldMs >= HoldTimings::RESET_START_MS) {
         display.showResetBar(heldMs);
@@ -349,7 +329,6 @@ void onButtonHold(uint32_t heldMs) {
 }
 
 void onConfigThreshold() {
-
     if (wifiActive) {
         finishExitWifi();
     } else {
@@ -384,7 +363,6 @@ void setup() {
     button.onPress           = onButtonPress;
     button.onHold            = onButtonHold;
     button.onHoldCancelled   = []() {
-
         bool alwaysOn = Profiles::getSettings().displayAlwaysOn || wifiActive;
         display.showStatus(Profiles::getActive().name, alwaysOn);
         pressCount = 1;
@@ -411,10 +389,7 @@ void setup() {
     USB.begin();
     HID.begin();
 
-    // Started last, so setup() itself is never watched. A hang before this
-    // point is a bricked-at-boot device, which you find the moment you flash
-    // it; the watchdog is here for the silent hang months later. It also keeps
-    // first-boot LittleFS formatting from having to fit inside the timeout.
+    // Armed last, so first-boot flash formatting never has to fit the timeout.
     esp_task_wdt_init(WDT_TIMEOUT_SECONDS, true);
     esp_task_wdt_add(NULL);
     Serial.printf("[wdt] Watchdog armed (%ds)\n", WDT_TIMEOUT_SECONDS);
@@ -431,7 +406,8 @@ void loop() {
     if (wifiActive) {
         server.handleClient();
     } else if (WiFi.getMode() != WIFI_OFF) {
-
+        // A web request asked to leave config mode. The AP is torn down here
+        // rather than in the handler, so the HTTP reply gets out first.
         finishExitWifi();
     }
 
@@ -463,7 +439,6 @@ void loop() {
     memcpy(response + 1, ok ? "ACK" : "ERR", 3);
 
     if (!hidDevice.send(response)) {
-
         Serial.println("[hid] Failed to queue response report");
     }
 }

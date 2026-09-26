@@ -19,9 +19,16 @@ A small background service on the PC watches for power events and sends `ON` or
 as the TV's own remote would. The stick appears as a standard USB HID device, so
 there is no driver to install on any OS.
 
-**The rule it follows:** the TV mirrors what your PC's own screen is doing. If
-the display is on, the TV is on. If the display sleeps, blanks or shuts down,
-the TV goes off.
+**The rule it follows:** the TV follows your PC's power. On Windows and Linux
+alike, the TV turns off when the PC sleeps or shuts down, and on when it wakes
+or boots.
+
+Windows goes one step further and follows the screen itself, so an idle screen
+blank turns the TV off and touching the mouse turns it back on. Linux has no
+system-wide signal for that, so there an idle blank leaves the TV on. If you
+want the TV off when a Linux machine idles, set the desktop to sleep when idle
+rather than only blank the screen. And leave the TV's own "no signal" auto
+power-off disabled: on Linux nothing would turn the TV back on afterwards.
 
 ---
 
@@ -139,7 +146,7 @@ and service for you.
 
 > **The `.deb` needs sdbus-c++ 2.x, which Ubuntu 24.04 LTS does not have** — it
 > ships 1.4.0. The package installs on Debian 13+ and Ubuntu 25.04+. On 24.04,
-> build from source.
+> build from source. The `.rpm` needs Fedora 44 or newer.
 
 **Arch** builds from source on your machine:
 

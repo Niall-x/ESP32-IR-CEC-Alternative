@@ -7,7 +7,6 @@
 
 class Button {
 public:
-
     std::function<void()> onPress;
     std::function<void(uint32_t)> onHold;
 

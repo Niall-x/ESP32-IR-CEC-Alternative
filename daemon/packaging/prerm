@@ -1,32 +1,19 @@
 #!/bin/sh
-# Pre-removal hook — shared by the .deb and the .rpm.
-#
-# Unlike postinst this one *must* read $1, because it has to tell a real removal
-# apart from the removal half of an upgrade. Stopping the service during an
-# upgrade would leave it down afterwards, since the new package's postinst only
-# re-enables an already-enabled unit.
-#
-# The two conventions:
-#   dpkg  — "remove", or "upgrade <new-version>"
-#   rpm   — "0" for the final removal, "1" for an upgrade
-#
-# Matching both values in one case statement covers each without needing to know
-# which manager invoked us.
+# Pre-removal hook, shared by the .deb and the .rpm. Stops the service only on a
+# real removal, not the removal half of an upgrade.
+#   dpkg: "remove", or "upgrade <version>"      rpm: 0 = remove, 1 = upgrade
 
 set -e
 
 case "$1" in
     remove|0)
         if command -v systemctl >/dev/null; then
-            # Sends OFF to the TV on the way down, same as any other stop.
             systemctl disable --now esp32-ir-remote.service || true
         fi
         ;;
 esac
 
-# The esp32ir user and group are deliberately left behind. Removing an account
-# that may still own files is the kind of cleanup that goes wrong quietly, and
-# an unused system account costs nothing. Remove by hand if wanted:
+# The esp32ir account is left behind on purpose. Remove it by hand if wanted:
 #   sudo userdel esp32ir && sudo groupdel esp32ir
 
 exit 0

@@ -106,10 +106,8 @@ function render() {
 
   profiles.forEach((p, i) => {
     const isActive = i === settings.active_profile;
-    // A 0x0 code is the "codes not confirmed for this manufacturer" placeholder.
-    // The firmware answers ERR rather than transmitting one, so the profile is
-    // selectable but inert — worth showing before someone picks it and waits
-    // for a TV that is never going to respond.
+    // A 0x0 code means "not configured": the firmware answers ERR instead of
+    // transmitting, so flag the profile before someone picks it.
     const unset = isUnset(p.on) || isUnset(p.off);
     const div = document.createElement('div');
     div.className = 'card' + (isActive ? ' active' : '');
@@ -179,7 +177,6 @@ function setActive(i) {
 function addProfile() {
   profiles.push({ name: 'New', protocol: 'NEC', on: '0x00000000', off: '0x00000000', visible: true });
   render();
-  // Scroll to bottom
   window.scrollTo(0, document.body.scrollHeight);
 }
 
@@ -190,11 +187,8 @@ function removeProfile(i) {
   profiles.splice(i, 1);
 
   if (deletingActive) {
-    // Deleting the active profile needs an explicit choice. Adjusting only the
-    // indices *around* it left the index pointing at whichever profile slid
-    // into the freed slot, silently making an unrelated TV the active one.
-    // Fall back to the preceding entry and say so — the Active badge moves in
-    // the same render, so the change is visible rather than inferred.
+    // Fall back to the preceding profile and say so, rather than letting the
+    // index silently land on whichever profile slid into the freed slot.
     settings.active_profile = Math.max(0, i - 1);
     render();
     showStatus('Deleted the active profile — "' +
@@ -209,10 +203,8 @@ function removeProfile(i) {
 // Accepts "0x20DF23DC" or a bare "20DF23DC", up to 32 bits.
 const CODE_PATTERN = /^(0x)?[0-9a-fA-F]{1,8}$/;
 
-// Validate before POSTing. The firmware parses an unparseable code as 0x0 and
-// treats 0x0 as "not configured", so a typo does not corrupt anything — but it
-// does produce a profile that silently refuses to transmit, and the place to
-// catch that is here, where the user can still see what they typed.
+// Validate before saving: the firmware reads a typo as 0x0, which saves fine
+// but never transmits.
 function validate() {
   for (let i = 0; i < profiles.length; i++) {
     const p = profiles[i];
@@ -239,10 +231,8 @@ async function save() {
     showStatus('Saving...');
     settings.display_always_on = document.getElementById('alwaysOn').checked;
 
-    // Sent sequentially, not in parallel. /api/settings range-checks
-    // active_profile against the profile list currently on the device, so the
-    // new list has to be stored first — otherwise deleting a profile can have
-    // the index validated against the old list and select the wrong one.
+    // Sequential: the device checks active_profile against its stored list,
+    // so the new list has to land first.
     const pRes = await fetch('/api/profiles', {
       method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(profiles)
     });
@@ -273,9 +263,7 @@ async function factoryReset() {
     showStatus('Resetting...');
     const res = await fetch('/api/factory-reset', { method: 'POST' });
     if (!res.ok) throw new Error();
-    // A factory reset also exits wireless config mode, so the access point is
-    // already shutting down. Reloading here would always fail and report the
-    // reset as broken when it had in fact succeeded.
+    // The reset also shuts the access point down, so a reload would fail.
     showStatus('Factory reset complete. WiFi shutting down — you can close this page.', false, true);
   } catch (e) {
     showStatus('Factory reset failed', true);

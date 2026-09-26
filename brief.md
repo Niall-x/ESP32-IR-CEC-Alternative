@@ -1,78 +1,66 @@
 # ESP32 IR Remote — Project Brief
 
 A USB stick that makes a TV follow a PC's power state. The PC sleeps, the TV
-turns off. The PC wakes, the TV turns on. It is a replacement for HDMI-CEC on
-machines where CEC does not work, which is most PCs.
+turns off. The PC wakes, the TV turns on. It replaces HDMI-CEC, which most PCs
+do not have.
 
-This file is the single source of truth for how the project works and where it
-stands. It is meant to be read start to finish in about fifteen minutes.
+This is the single source of truth for how the project works and where it
+stands. The README covers building and using it; this covers why it is the way
+it is.
 
 ---
 
-## 1. The shape of the thing
-
-Two pieces of software, one cable between them.
+## 1. How it works
 
 ```
   PC                                  ESP32-S3 stick                TV
-  ──                                  ─────────────                 ──
   daemon  ──── USB HID ────────────►  firmware  ──── IR LED ─────►
-  (a background service)              (Arduino)      (infrared)
+  (background service)                (Arduino)      (infrared)
 ```
 
-**The daemon** is a small background program on the PC. Its only job is to
-notice power events — sleep, wake, shutdown, boot — and send the word `ON` or
-`OFF` down the USB cable.
+**The daemon** runs on the PC. It notices power events and sends `ON` or `OFF`
+down the USB cable.
 
-**The firmware** runs on the ESP32. It listens on USB, and when it hears `ON` or
-`OFF` it blinks the matching infrared code at the TV, exactly the way the TV's
-own remote would. It also drives a small OLED screen and one button, and can put
-up a WiFi configuration page.
+**The firmware** runs on the stick. When it hears `ON` or `OFF` it sends the
+matching infrared code to the TV, like the TV's own remote would. It also runs a
+small screen, one button, and a WiFi setup page.
 
-Neither side knows anything about the other beyond those two words and a reply.
+The two sides share nothing but those two words and a reply.
+
+### The rule
+
+**The TV mirrors the PC's screen.** Screen on, TV on. Screen off — idle, sleep,
+shutdown — TV off. That is what CEC does, which is the point.
+
+**Windows follows this exactly. Linux follows power state instead.** Windows
+tells a service whenever the screen turns on or off, idle blanks included.
+Linux has no system-wide equivalent, so on Linux the TV follows sleep, wake,
+shutdown and boot, and an idle blank that does not lead to sleep leaves the TV
+on. That was a deliberate choice (§10).
+
+### Why USB HID and not a serial port
+
+HID is the USB class keyboards and mice use, so every OS already has a driver:
+no COM port to pick, nothing to install. The cost is that the chip needs native
+USB. The ESP32-S3 and S2 have it; the C3, classic ESP32 and ESP8266 do not. A
+serial version existed and was removed (§11).
 
 ### Where things live
 
 ```
 README.md  LICENSE  VERSION  brief.md  flake.nix
-firmware/          the ESP32 side — src/, data/ (the web UI), platformio.ini
-daemon/            the PC side — src/, packaging/, CMakeLists.txt
-hardware/          FreeCAD enclosure and supplier part models
-tools/hid-test/    a minimal HID echo, for when a board will not talk at all
-.github/workflows/ builds both halves on every push; packages on a v* tag
+firmware/          the stick: src/, data/ (the web page), platformio.ini
+daemon/            the PC side: src/, packaging/, CMakeLists.txt
+hardware/          FreeCAD enclosure and part models
+tools/hid-test/    a bare HID echo, for a board that will not talk at all
+.github/workflows/ compiles the daemon on every push; packages on a v* tag
 ```
 
-`VERSION` sits at the root rather than under `daemon/` because the two halves
-share a wire protocol and must ship together — there is one version and it
-belongs to the device. `CMakeLists.txt`, `flake.nix` and `PKGBUILD` all read it
-from there.
-
-No path in the repository contains a space, which is deliberate: every script,
-CMake path and CI step would otherwise need quoting, and the one that gets
-forgotten fails in a way that is tedious to trace.
-
-### The one idea the whole project rests on
-
-**The TV mirrors what the PC's own screen is doing.**
-
-That is the rule, and everything else follows from it. If the PC's display is
-on, the TV should be on. If the display goes off — because you asked it to,
-because the machine idled out, because it went to sleep or shut down — the TV
-should be off. It is the same behaviour a CEC-connected display gives you, which
-is the point: this device exists because CEC usually is not available on a PC.
-
-### Why USB HID and not a serial port
-
-HID (Human Interface Device) is the USB class that keyboards and mice use. The
-advantage is that **every OS already has a driver for it**. Plug the stick in
-and it works — no COM port to pick, no driver to install, nothing to sign on
-Windows. That is why the project moved from serial to HID.
-
-The cost is that the ESP32 has to have native USB hardware. The ESP32-S3 does,
-and so does the S2. The ESP32-C3 does **not** (its USB controller only does
-serial/JTAG, not arbitrary HID), and neither do the classic ESP32 or the
-ESP8266. A serial version existed once and was removed; git history has it if
-it is ever wanted again — see §11.
+- `VERSION` is at the root because both halves share one protocol and ship
+  together. CMake, the flake and the PKGBUILD all read it.
+- No path contains a space, so no script ever needs quoting.
+- `tools/hid-test` uses its own throwaway USB ID, `1234:5678`, so it can never
+  be mistaken for the real device.
 
 ---
 
@@ -80,121 +68,95 @@ it is ever wanted again — see §11.
 
 | Part | Notes |
 |---|---|
-| ESP32-S3 SuperMini | Native USB. Any S3 board works; pins are set in code, not by the board profile. |
-| KY-005 IR LED module | On GPIO 4. |
+| ESP32-S3 SuperMini | Any S3 board works; pins are set in code. |
+| KY-005 IR LED module | GPIO 4. |
 | SSD1306 OLED, 128×32, I²C | SDA GPIO 2, SCL GPIO 3, address 0x3C. |
-| Push button | GPIO 5, to ground (uses the internal pull-up). |
+| Push button | GPIO 5 to ground (internal pull-up). |
 
-CAD for the enclosure is in `hardware/`. The `.FCStd` is the editable master;
-`.stl` exports are deliberately not tracked in git.
+The enclosure is `hardware/ESP32-Remote-Housing.FCStd`. STL exports are not
+kept in git; export fresh ones from the FreeCAD file.
 
-### The USB identity, and why it is `1209:0001`
+### The USB ID, `1209:0001`
 
-Every USB device announces a **vendor ID** and a **product ID**. Vendor IDs come
-from the USB-IF and cost real money. `0x1209` is **pid.codes**, a vendor ID held
-in trust for open-source hardware and given out free; `0x0001` under it is their
-designated **test PID**, for a device that has not been allocated one of its own
-yet. Getting a real product ID is therefore a **PID-only** change — the vendor
-half never moves.
+Every USB device has a vendor ID and a product ID. `1209` belongs to
+**pid.codes**, which gives product IDs to open-source hardware for free.
+`0001` is their shared **test** ID. Their rule: it "MUST NOT be used on any
+device that will be redistributed, sold, or manufactured."
 
-**The caveat, in their words.** pid.codes state that `1209:0001` "is reserved
-for use in private testing. Anyone may assign it to their device while they're
-testing in-house, but it MUST NOT be used on any device that will be
-redistributed, sold, or manufactured."
+That binds on hardware. A release here ships only daemon packages, and the one
+stick carrying the test ID is the author's, so releasing on it was accepted. It
+stops being acceptable once a stick goes to anyone else.
 
-That is a prohibition, not a preference — and it binds on redistributing a
-**device**. A GitHub Release here ships daemon packages, not hardware, and the
-only stick carrying `1209:0001` is the author's own. Publishing on it was
-weighed and accepted on that basis (§9), and stops being defensible the moment
-sticks are handed to other people.
+Applying for a real ID needs only a public open-source repository, which
+exists, so it can happen any time. The new ID will be `0x2000` or higher. Do
+not invent a number in the meantime.
 
-**Applying is not blocked on anything.** pid.codes want only a public source
-repository under an open-source licence, which now exists — so the pull request
-can go in at any time. PIDs `0x0000`–`0x1FFF` are reserved, so the allocated
-number will be `0x2000` or above. Do not substitute a made-up number while
-waiting: that squats on a registry which may legitimately assign it to somebody
-else, in the namespace you are about to ask a favour from.
-
-The value lives in **five** hand-kept places, which must change together:
+The ID is copied by hand into five files, which must change together (kept by
+hand on purpose — §10):
 
 | File | Spelling |
 |---|---|
 | `firmware/src/main.cpp` | `0x1209` / `0x0001` |
 | `daemon/src/main.cpp` | `0x1209` / `0x0001` |
-| `daemon/99-esp32-ir-remote.rules` | `"1209"` / `"0001"` (lowercase, no `0x`) |
+| `daemon/99-esp32-ir-remote.rules` | `"1209"` / `"0001"` |
 | `daemon/packaging/windows/install-service.ps1` | `"1209"` / `"0001"` |
 | `daemon/packaging/windows/verify-windows.ps1` | `"1209"` / `"0001"` |
 
-Five copies is itself the argument for generating them from one source — §9.
-
 ---
 
-## 3. The conversation over USB
+## 3. The USB conversation
 
-Every exchange is one message and one reply, in fixed-size 64-byte packets.
+One message, one reply, each a fixed 64-byte packet.
 
-**PC → ESP32:** `[sequence byte][ "ON" or "OFF" ][zero padding...]`
+- **PC → stick:** a sequence number, then `ON` or `OFF`.
+- **Stick → PC:** the same sequence number, then `ACK` or `ERR`.
 
-**ESP32 → PC:** `[same sequence byte][ "ACK" or "ERR" ][zero padding...]`
+**`ACK` means the infrared was actually sent.** `ERR` means it was not, which in
+practice means the active profile has no code for that direction. The daemon
+treats both as "did not work", but `ERR` arrives instantly and says why,
+instead of looking like a broken cable.
 
-The **sequence byte** is a counter that increments on every command (1…255, then
-back to 1). The reply carries the same number back, and the daemon ignores any
-reply carrying a different one.
+**The sequence number** (1–255, then back to 1) stops a late reply being taken
+for the wrong command. Without it: `OFF` times out, its `ACK` arrives late, and
+the next `ON` reads that stale `ACK` as its own success.
 
-It exists to catch one specific race. The daemon sends `OFF`; USB is
-re-enumerating, so the reply is slow; the daemon gives up and reports failure.
-The ESP32 *did* receive it, transmits, and queues an `ACK` that is now in
-flight. The next event sends `ON` — and without the sequence byte the daemon
-would read that stale `ACK`, believe `ON` was confirmed, and log a success that
-never happened. One byte on the wire prevents it.
+### One timeout, and not waiting for a stick that is not there
 
-`ACK` means **the infrared signal was actually transmitted**. `ERR` means it was
-not, which in practice means the active profile has no code stored for that
-direction. Both are useful: the daemon treats them the same way (the command
-failed), but `ERR` arrives instantly and says *why*, instead of looking
-identical to a broken cable for two seconds.
+A send gets **2 seconds** in total — opening the device, any retry, and the
+reply. A healthy send takes under 200 ms. The number lives in one place in the
+transport, and callers cannot change it.
 
-### One timeout, and failing fast when nothing is plugged in
+What happens when the stick is missing matters more:
 
-A send gets **2 seconds** — total, covering opening the device, any retried
-write, and waiting for the reply. There is one number, in
-`HIDTransport.cpp`, and nothing else tunes it. A healthy round trip takes well
-under 200 ms, and every deadline an OS imposes on us is longer than 2 s.
+- **Not plugged in** → give up immediately.
+- **Was working a moment ago** → keep retrying until the 2 s are up; it is
+  probably re-connecting.
+- **Owed a command before it has arrived** (the boot `ON`) → wait for the OS to
+  say it has arrived. Never retry on a timer.
 
-The more important rule is what happens when the stick is **not connected**:
-
-- **Nothing enumerated** → give up immediately. There is nothing to wait for.
-- **A handle we had just stopped working** → retry until the deadline, because
-  the device demonstrably exists and is probably re-enumerating.
-- **A command owed to a device that has not arrived yet** → not the transport's
-  problem. It waits for the arrival notification in §5, never on a timer.
-
-That distinction is what lets you leave the daemon installed with the stick
-unplugged and have sleep and shutdown behave completely normally. Without it,
-the daemon sits polling for a device that will never appear, holding the machine
-up every single time.
+That is why the daemon can stay installed with the stick unplugged without ever
+slowing down sleep or shutdown.
 
 ---
 
 ## 4. The firmware (`firmware/`)
 
-Five modules, about 1,250 lines.
+About 1,200 lines.
 
 | File | Does |
 |---|---|
-| `main.cpp` | USB HID device, IR sending, the WiFi config web server, and the wiring between button, display and storage. |
-| `Profiles.cpp/.h` | The TV profiles and settings, and reading/writing them to flash. |
-| `Display.cpp/.h` | Everything drawn on the OLED, and the timers that blank it. |
-| `Button.cpp/.h` | Turns raw pin readings into press / hold / release events. |
-| `HoldTimings.h` | The four hold durations, in one place. |
+| `main.cpp` | USB, sending IR, the web server, and wiring the rest together. |
+| `Profiles.cpp/.h` | TV profiles and settings, saved to flash. |
+| `Display.cpp/.h` | Everything on the screen, and when it blanks. |
+| `Button.cpp/.h` | Turns the button's raw signal into press, hold and release. |
+| `HoldTimings.h` | The button hold times, in one place. |
 
 ### Profiles
 
 A **profile** is one TV: a name, an IR protocol (NEC, Samsung or Sony), an ON
-code, an OFF code, and a "visible" flag that controls whether the button cycles
-through it.
+code, an OFF code, and whether the button cycles through it. Up to 32.
 
-Four ship by default, and **every one of them transmits**. Up to 32 profiles.
+Four ship by default, and every one transmits:
 
 | Profile | Protocol | ON | OFF |
 |---|---|---|---|
@@ -203,618 +165,442 @@ Four ship by default, and **every one of them transmits**. Up to 32 profiles.
 | Sony | SONY | `0x00000750` | `0x00000F50` |
 | Toshiba | NEC | `0x02FD7E81` | `0x02FDFE01` |
 
-That is the rule for the factory default: a brand earns a place only once a
-discrete on/off pair exists that covers the product line rather than one model.
-A default profile that cannot work is worse than no profile, because it looks
-like the device supports your TV.
+**A brand only ships as a default if one discrete ON/OFF pair covers its whole
+range.** A default that cannot work is worse than none, because it looks like
+support. So **TCL and Hisense are left out**: TCL only has a power toggle, in a
+protocol the firmware does not speak, and Hisense is not in the main code
+database at all. Both use different remotes across markets, so there is no one
+code set to ship. Their owners add a profile in the web page.
 
-**TCL and Hisense are therefore absent, not blank.** Neither publishes usable
-discrete codes: TCL has only a power *toggle*, in a protocol this firmware does
-not speak, and Hisense is not in irdb at all. Filling them with a toggle would
-be worse still — the same code in both fields flips the TV on every command,
-which is the drift discrete codes exist to prevent. Owners of those sets add a
-profile through the web UI instead.
+**Only LG is proven on a real TV.** Samsung, Sony and Toshiba were converted
+from published codes and checked against the encoder, but never tried. Two
+Samsung risks:
 
-That difference is structural, not bad luck. LG, Samsung, Sony and Toshiba
-design their own remotes across a whole product line, so one code set covers the
-brand. TCL and Hisense are assemblers — the same model number ships as a Roku TV
-in one market and a Google TV in another, with different remotes.
+- Reports say some Samsungs stop listening to IR after being off a long time.
+  If true, the TV would not wake with the PC in the morning. Check this first
+  if a Samsung turns up.
+- Samsung's discrete pair is not in irdb (below); it comes from a single other
+  source.
 
-The *Not Configured* path still exists and still matters: it catches a
-user-added profile saved with one or both codes blank.
+**Defaults are only written on first boot**, when `profiles.json` does not
+exist. Picking up new defaults needs a factory reset; re-flashing is not
+enough.
 
-**Changing the defaults does not change a device that has already booted.**
-`Profiles::begin()` writes them only when `profiles.json` is absent, so picking
-up a new default set needs a factory reset — hold the button past 16 s.
-Re-flashing alone is not enough.
+**Storage.** Profiles and settings are two JSON files in the stick's flash.
+Each save writes a temporary file, checks it was written in full, then swaps it
+in. The size check catches a save cut short by full flash or lost power;
+without it, a half-written file would replace a good one and every saved code
+would be gone.
 
-**Only LG is proven on hardware.** The other three are derived from corroborated
-sources and cross-checked against the encoder, but nobody has pointed the stick
-at a Samsung, Sony or Toshiba. Two known risks:
+### Discrete codes, not toggles
 
-- **Samsung deep sleep.** There are reports that Samsung's discrete power-on
-  stops working once the TV has been off for a long time — the set stops
-  listening to IR. If true, that hits this project's main use case directly
-  (PC wakes in the morning, TV does not). Unconfirmed, and worth being the first
-  thing checked if a Samsung ever turns up.
-- **Samsung's discrete pair is not in irdb**, which lists only the toggle. It
-  comes from RemoteCentral instead and derives consistently to the published
-  hex, but it is one source rather than two.
+Most remotes send one **toggle** code for power, which flips the TV. That is
+useless here: once the TV and PC are out of step, every command makes it
+worse. This project needs **discrete** codes — one that only turns the TV on,
+one that only turns it off. Most TVs accept them even though their own remote
+never sends them, so they have to be looked up.
 
-Codes are stored on the ESP32's own flash filesystem (LittleFS) as two JSON
-files: `/profiles.json` and `/settings.json`. Writes go to a `.tmp` file first,
-are length-checked, and only then renamed over the real file.
-
-The length check is not about validating what you typed — it catches a
-*truncated* write, from the flash filling up or power being cut mid-write.
-Without it the atomic rename would atomically install a valid-looking but
-unparseable file, and every IR code you had entered would be gone on the next
-boot.
-
-### Discrete vs toggle codes
-
-Most TV remotes send one *toggle* code for the power button — press it and the
-TV flips state. That is useless here, because if the TV and PC ever drift out of
-sync every command makes it worse.
-
-This project needs **discrete** codes: a separate "power on" code and "power
-off" code. Most TVs understand them even though their own remote never sends
-them, which is why the codes have to be looked up rather than copied off the
-remote in front of you.
-
-A useful consequence: repeat commands are always safe. Sending `OFF` to a TV
-that is already off does nothing at all. The daemon never has to track what it
-last sent, and never has to decide whether a command is redundant.
+A bonus: repeating a command is always harmless. `OFF` to a TV that is off does
+nothing, so the daemon never has to remember what it last sent.
 
 ### Where IR codes come from
 
-Kept here because finding these again from scratch is slow, and because getting
-a code wrong is worse than having none.
+Kept because finding codes again from scratch is slow, and a wrong code is
+worse than none.
 
-**[irdb](https://github.com/probonopd/irdb)** is the one to reach for first —
-the largest crowd-sourced database, and it stores codes as *protocol, device,
-subdevice, function* rather than as raw hex, which is exactly what you need.
-Browse `codes/<Brand>/TV/` and read the CSVs:
+**[irdb](https://github.com/probonopd/irdb) first.** It stores codes as
+protocol parameters rather than raw hex, which is what you want. Look in
+`codes/<Brand>/TV/`:
 
 ```
-curl -s https://api.github.com/repos/probonopd/irdb/contents/codes/Sony/TV
 curl -s https://cdn.jsdelivr.net/gh/probonopd/irdb@master/codes/Sony/TV/1,-1.csv | grep -i power
   POWER ON/OFF,Sony12,1,-1,21
   POWER ON,Sony12,1,-1,46
   POWER OFF,Sony12,1,-1,47
 ```
 
-Two things that reads out at a glance: whether **discrete** on/off codes exist
-at all (many brands only have a toggle), and **how many code sets** the brand
-has. One code set for a whole brand means one consistent scheme and good
-coverage; five means it varies by model and you should not ship a guess.
+That shows at a glance whether discrete codes exist, and how many code sets the
+brand has. One set means one scheme for the whole brand; five means it varies
+by model, and no single default is safe.
 
-**Turning those parameters into the hex the firmware wants.** Do *not* copy hex
-off a forum — convert from the protocol parameters using the same encoder the
-firmware links against, so the bit ordering cannot disagree:
+**Convert with the firmware's own encoder**, never with hex copied off a forum,
+so the bit order cannot disagree. `encodeNEC` and `encodeSony` are in
+`firmware/.pio/libdeps/lolin_s3_mini/IRremoteESP8266/src/`; they are small
+enough to copy into a scratch C file and run. **Check the method** by encoding
+a code you already know: Sony's toggle should come out `0xA90`, and LG's ON
+`0x20DF23DC`.
 
-- NEC — `IRsend::encodeNEC(address, command)` in `ir_NEC.cpp`
-- Sony — `IRsend::encodeSony(nbits, command, address, extended)` in `ir_Sony.cpp`
+**Other sources:** RemoteCentral's discrete code library (where Samsung's pair
+came from); the SB-Projects protocol pages, when a code looks right but does
+not work (Sony's 12/15/20-bit lengths are the classic trap — TVs use 12);
+Flipper Zero and LIRC databases, usually model-specific.
 
-Both live in `firmware/.pio/libdeps/lolin_s3_mini/IRremoteESP8266/src/`. They are
-small and pure, so the quickest check is to copy them into a throwaway C file and
-print the values.
-
-**Sanity-check any result two ways.** Run the brand's *toggle* code through the
-same path and confirm it matches a value you can find independently — Sony's
-toggle should come out `0xA90`, LG's ON should come out `0x20DF23DC`, which is
-the code already proven on real hardware here. If the toggle reproduces, the
-encoding is right and the discrete pair can be trusted.
-
-**Other sources**, in rough order of usefulness:
-
-- [RemoteCentral's discrete code library](https://files.remotecentral.com/library/index.html)
-  — curated per brand, and the best source for discrete codes irdb lacks. This
-  is where the Samsung discrete pair came from; irdb only lists Samsung's toggle.
-- [SB-Projects protocol reference](https://www.sbprojects.net/knowledge/ir/sirc.php)
-  — how the protocols are actually framed. Read this when a code looks right but
-  does not work; the Sony 12/15/20-bit distinction is the classic trap.
-- The Flipper Zero and LIRC remote databases, and manufacturer RS-232/IR PDFs
-  (Hisense publish one) — worth a look, but model-specific far more often.
-
-**Watch out for.** Forum hex with no protocol stated (unusable — you cannot tell
-12-bit Sony from 20-bit). Single-model blog posts presented as brand-wide. And
-NEC codes whose checksum does not validate: in NEC the second command byte is
-the bitwise inverse of the first, so `0x…8B75` is wrong on its face because
-`0x8B` inverts to `0x74`. That one check rejects a surprising amount of bad data.
+**Red flags:** hex with no protocol named; one model presented as a whole
+brand; NEC codes that fail the checksum — the fourth byte must be the bitwise
+inverse of the third, so `0x…8B75` is wrong because `0x8B` inverts to `0x74`.
 
 ### The button
 
-One button, four things, decided by how long you hold it:
-
-| Hold for | On release |
+| Hold for | Result |
 |---|---|
-| under 0.3 s | **Press** — wake the screen; press again to cycle to the next visible profile |
-| 0.3 – 4 s | Nothing (you changed your mind — the screen shows a filling bar as a countdown) |
-| 4 – 7 s | **Toggle WiFi config mode** on or off |
-| 7 – 16 s | Nothing (again, a bar shows how far you are) |
-| held past 16 s | **Factory reset** — fires while still held, not on release |
+| under 0.3 s | **Press**: wake the screen; press again to switch to the next profile |
+| 0.3–4 s | Nothing — a bar fills; let go to cancel |
+| 4–7 s | **Turn WiFi setup mode on or off**, on release |
+| 7–16 s | Nothing — the reset bar fills; let go to cancel |
+| 16 s | **Factory reset**, while still held |
 
-The press behaviour has one subtlety worth knowing: when the screen is off, the
-*first* press just wakes it and shows the current profile, and only the next
-press cycles. When "display always on" is enabled the screen never sleeps, so
-every press cycles. That is deliberate — it stops a blind press in the dark
-silently changing which TV you are controlling.
+When the screen is off, the first press only wakes it; the next one switches
+profile. That stops a press in the dark silently changing which TV you control.
+With "display always on" set, every press switches.
 
-All four durations live in `HoldTimings.h` and are used from there.
+### The screen
 
-### The watchdog
+Shows the active profile, then blanks after 2 seconds unless "display always
+on" is set. Also shows `TV On` / `TV Off` when a command arrives,
+`Not Configured` when a profile has no code, the two hold bars, and in WiFi
+mode the address to browse to.
 
-The ESP32 has a hardware timer that reboots the chip if the firmware stops
-feeding it. `loop()` feeds it on every pass, so if `loop()` ever stops running —
-a hang, a deadlock, a wait that never returns — the device resets itself after
-**20 seconds** and comes back working.
+Each bar has one block per second held, worked out from the hold times, so the
+hold bar has 4 blocks and the reset bar 9. Neither ever fills completely: the
+moment it would, the screen changes instead, and that is the signal.
 
-This matters more than it sounds. A hung stick and an unplugged stick look
-identical from the PC: the daemon just sees a command that got no reply. So
-without the watchdog a hang would sit there until somebody noticed the TV had
-stopped following the PC — which is exactly the unreliability this device exists
-to beat. A reset costs nothing: profiles live in flash, and the daemon reopens
-the device on its next command.
+### WiFi setup mode
 
-The 20 seconds is set by the **web server**, not by anything in our own code.
-Serving the config page can legitimately block for around 12 s inside one pass
-of `loop()` if a browser stalls mid-request (the server waits 5 s for the
-request, 5 s for data to be acknowledged and 2 s for the close). Everything else
-— button, display, IR, USB — is under 200 ms. The generous margin is deliberate:
-a false reset while somebody is saving IR codes would be worse than a slow one.
+Hold the button 4–7 s and the stick starts its own WiFi network, `ESP32-IR-Remote`
+(password `irremote123`). The page at the address on the screen can add, edit,
+delete and reorder profiles, choose the active one, toggle "display always on",
+and factory reset. It is stored in the stick's flash and uploaded with
+`pio run -t uploadfs`. IR keeps working while setup mode is on.
 
-It is armed at the very end of `setup()`, so start-up is never watched. A hang
-before that point is a bricked-at-boot device you find the moment you flash it,
-and leaving setup out keeps first-boot flash formatting from having to fit
-inside the timeout.
+### Recovering on its own
 
-### The OLED
+**Watchdog.** If the firmware's main loop ever stops for **20 seconds**, the
+chip restarts itself. A hung stick looks exactly like an unplugged one to the
+PC, so without this a hang would last until somebody noticed. A restart loses
+nothing: profiles are in flash, and the daemon reconnects on its next command.
+20 s is set by the web server, which can legitimately stall ~12 s on a slow
+browser; everything else takes under 200 ms. The watchdog starts after setup,
+so first-boot flash formatting never has to beat it.
 
-Shows the active profile. By default it blanks after 2 seconds; "display always
-on" keeps it lit. It also shows: `TV On` / `TV Off` confirmations when a command
-arrives, the two hold progress bars, `Not Configured` when a profile has no
-code, and — in WiFi mode — the AP's IP address.
-
-**The progress bars are one block per second**, and the block count is derived
-from the thresholds in `HoldTimings.h` rather than written down separately — so
-the hold bar has 4 blocks and the reset bar 9, and both follow automatically if
-a timing changes. That makes them countable rather than merely watchable: four
-blocks means four seconds.
-
-Each bar stops one block short of full, because the moment it would complete is
-the moment the screen changes — to *Release To Enter Wireless Config!* at 4 s,
-and to the status screen when the reset fires at 16 s. The screen changing is
-the completion signal.
-
-### WiFi config mode
-
-Hold the button 4–7 seconds and the ESP32 starts its own WiFi access point:
-
-- SSID `ESP32-IR-Remote`, password `irremote123`
-- Browse to the IP shown on the OLED
-
-The page lets you add, edit, delete and reorder profiles, set the active one,
-toggle "display always on", and factory reset. It is served from LittleFS
-(`firmware/data/index.html`, uploaded with `pio run -t uploadfs`).
-
-The AP is transient and user-initiated — it is not running unless you asked for
-it. Power syncing keeps working normally while it is up.
+**USB after sleep.** When the PC suspends the USB port and resumes it, the stick
+disconnects and reconnects itself, so it never stays half-awake. The Windows
+installer also stops Windows suspending the idle stick at all (§5).
 
 ---
 
 ## 5. The daemon (`daemon/`)
 
-About 1,450 lines of C++, one binary, built with CMake. It is built around two
-small interfaces, which is what keeps Linux and Windows from tangling:
+About 1,400 lines of C++, one program, built with CMake. Two small interfaces
+keep the platforms apart:
 
-- **`ITransport`** — "send this command, tell me if it was confirmed."
-  `HIDTransport` is the only implementation and is shared by both platforms.
-- **`IPowerMonitor`** — "watch the OS and call me when the TV should change."
-  `LinuxPowerMonitor` and `WindowsPowerMonitor` implement it.
+- **Transport** — "send this command; did it work?" One implementation
+  (`HIDTransport`), shared by both platforms.
+- **Power monitor** — "tell me when the TV should change." One per platform
+  (`LinuxPowerMonitor`, `WindowsPowerMonitor`).
 
-`main.cpp` picks the right monitor for the platform and connects them. That
-split is why Windows support could be added later without disturbing Linux.
+### Linux
 
-### Linux (`LinuxPowerMonitor`, ~235 lines)
-
-Linux makes this easy. `systemd-logind` broadcasts `PrepareForSleep` and
-`PrepareForShutdown` over D-Bus, and — crucially — lets a program take an
-**inhibitor lock** that *delays* the sleep until it says it is ready.
-
-So the sequence is honest end to end:
+**Sleep and shutdown** come from `systemd-logind`, which also lets a program
+take an **inhibitor lock**: sleep and shutdown are held off until the program
+lets go. So the TV is really off before the PC goes down:
 
 ```
-sleep requested → daemon sends OFF → ESP32 transmits IR → ACK
-               → daemon releases the lock → machine sleeps
+sleep requested → daemon sends OFF → stick sends IR → ACK → lock released → PC sleeps
 ```
 
-The TV is genuinely off before the PC goes down.
+The lock has to be held *before* the announcement; logind only waits for locks
+that already exist. So the daemon takes it at start-up and again after every
+wake. On wake it sends `ON`.
 
-**The lock has to be taken in advance — that is the API, not a choice we made.**
-`PrepareForSleep(true)` is not a request you can answer; it is an announcement
-that the delay window has already opened. logind collects who holds delay locks,
-*then* broadcasts, *then* waits for those specific file descriptors to close. A
-program that was not already holding one is not on the list being waited for. So
-the daemon takes the lock at startup and re-takes it on every wake.
+**Boot** is harder, because the daemon starts about 4.5 s before the stick is
+ready — the stick is powered by the PC that is booting. So the first `ON` fails,
+and the daemon waits for **udev** to announce the stick, then sends it. The
+waiting is event-driven, with no timer.
 
-**Boot is handled separately, and waits for the stick.** The daemon reaches
-`multi-user.target` before the ESP32 has finished enumerating — the stick is
-powered by the machine that is booting, so it is running its own `setup()` while
-systemd is starting us. The `ON` it owes has nowhere to go yet.
+**Two guards** stop that `ON` firing when it should not. It is only sent if the
+PC has been up for under 3 minutes, checked at start-up and again when the stick
+arrives. So a package upgrade restarting the service at 3 a.m. does not turn
+the TV on, and neither does replugging the stick a week later.
 
-Rather than retry on a timer, the daemon subscribes to **udev** and is told when
-a matching hidraw node appears. That is the same kind of doorbell it already
-uses for sleep, so `run()` waits on both at once with `poll()` rather than
-`enterEventLoop()`. If the udev watch cannot be set up it falls back to
-`enterEventLoop()` and the sleep path is unaffected.
+**The service's sandbox must allow `AF_NETLINK`**, the socket type udev uses.
+Without it, only the boot `ON` is lost — sleep, wake and shutdown all still
+work — so nothing looks wrong unless you read the log. This shipped once. The
+log now says exactly what to change.
 
-**The unit sandbox has to allow `AF_NETLINK`.** The udev monitor is a netlink
-socket, and `RestrictAddressFamilies=AF_UNIX` — which was correct when D-Bus was
-the only socket in use — blocks it. The daemon then starts normally, takes the
-inhibitor lock, handles sleep correctly, and silently loses only the boot `ON`.
-It shipped that way once. Both the unit file and the NixOS module grant it now,
-and the failure names itself in the log rather than reporting a generic
-"unavailable". Note that the fallback makes this class of failure *invisible in
-testing* unless the log is read: everything else keeps working.
+**Linux does not watch the screen.** An idle blank leaves the TV on (§10).
 
-Two guards decide whether that `ON` is actually sent: `systemJustBooted()` —
-uptime under 3 minutes — checked at startup **and again on arrival**. The first
-stops a package upgrade restarting the service at 3 a.m. from turning your TV
-on. The second stops replugging the stick a week later from doing the same.
+### Windows
 
-### Windows (`WindowsPowerMonitor`, ~545 lines)
+**Only a Windows Service is told about power events**, so the daemon runs as
+one, installed by `install-service.ps1`. This is normal for PC accessory
+software. Running the program by hand with `--console` sends one `ON` to check
+the stick answers, then exits.
 
-Windows is harder, for two reasons.
-
-**1. Only a Service gets power events.** A normal program does not receive
-sleep or shutdown notifications at all. So the daemon registers as a Windows
-Service — which the installer does for you; you never do it by hand. (This is
-completely standard for PC accessories: G HUB, iCUE, Synapse, Stream Deck and
-most printer software all install services.) Run the binary from a terminal with
-`--console` and it just checks the ESP32 answers, then exits. That is a
-debugging aid, nothing more.
-
-**2. Windows will not wait for you on sleep.** There is no inhibitor lock
-equivalent. `PBT_APMSUSPEND` is a *notification*: the machine is going down in
-about two seconds whatever you do. Shutdown is the opposite —
-`SERVICE_CONTROL_PRESHUTDOWN` genuinely does wait, and is the real equivalent of
-the Linux lock. The installer sets that timeout to 60 s explicitly.
-
-So the guarantee is not uniform, and that is accepted rather than solved:
+**Windows does not wait for sleep.** There is no inhibitor lock; the PC goes
+down about 2 s after announcing sleep, whatever the daemon is doing. A send
+usually takes ~200 ms, so it normally makes it, but it is not guaranteed.
+Shutdown *does* wait — the installer allows up to 60 s.
 
 | Event | Guaranteed? |
 |---|---|
 | Linux sleep / shutdown | Yes — inhibitor lock |
-| Windows shutdown | Yes — preshutdown |
-| Windows sleep | Best effort — ~2 s of grace, a send takes ~200 ms |
+| Windows shutdown | Yes — Windows waits for the service |
+| Windows sleep | Best effort — ~2 s |
 
-**What drives the decision.** The console display state, on every machine. The
-daemon registers for `CONSOLE_DISPLAY_STATE` notifications: display on → TV on,
-display off → TV off, dimmed → treated as on.
+**The screen's state drives everything.** Windows reports display on, off or
+dimmed; the daemon sends `ON`, `OFF` or `ON` (dimmed counts as on). This works
+the same on every type of Windows machine. When Windows says "display off" it
+has already blanked every screen, the TV included, so acting on it never
+blacks out a picture somebody is watching.
 
-There is no branching on the machine's sleep model. There used to be — the
-daemon probed whether the machine was classic S3, hibernate-capable or Modern
-Standby, and ignored a screen blank on machines where a real suspend event was
-coming. That whole apparatus is gone, because the premise was wrong: when
-Windows reports "display off" it has *already blanked every display, the TV
-among them*. Acting on it does not black out a screen somebody is watching — it
-turns off one that is already showing black.
+Sleep and wake are a backup trigger underneath. Wake does not send `ON` if the
+screen is still known to be off, and neither does the PC waking itself for
+overnight maintenance, since the screen stays off.
 
-Suspend and resume are kept underneath as a second trigger, in case a lid-close
-or an explicit Sleep ever reaches us without a display-state change first.
-Duplicate commands are harmless because the codes are discrete.
+**Boot `ON`.** Windows also reports the stick arriving, which delivers the boot
+`ON` if the stick was late. That only happens in the first 3 minutes after the
+**service** started, so a replug later leaves the TV alone. It is timed from
+the service starting, not from boot, because Windows' default **Fast Startup**
+is really a resume from hibernation: the PC's uptime can read hours after what
+the user saw as a cold boot, and an uptime check would skip the boot `ON` on
+most machines.
 
-Windows sees device arrival too, through `RegisterDeviceNotification`, and it is
-what delivers the boot `ON` there — the display-state notification decides the
-state, and arrival re-sends it if the stick was not yet present. A mid-session
-replug leaves the TV alone, because the re-assert only happens within
-`ARRIVAL_GRACE` of the service starting.
+This is why Linux and Windows use different clocks for the same job. Linux
+reacts to the daemon starting, which also happens on a service restart, so it
+must ask how long the PC has been up. Windows reacts to the stick arriving,
+which a restart does not cause. Sharing the code was tried and reverted.
 
-**That window is measured from service start, not system uptime, and the
-difference matters.** Windows **Fast Startup** is on by default on 10 and 11 and
-does not perform a real boot — it hibernates the kernel session and restores it
-— so `GetTickCount64()` can report hours after what the user experienced as a
-cold start. An uptime-based gate would skip the boot `ON` on most Windows
-machines. The service genuinely did just start either way, so that is the clock
-to measure against.
+**Threading.** Windows delivers events on its own thread, which must return at
+once, so it only records the event and a worker thread does the sending. Linux
+needs none of this: everything runs on one thread.
 
-Linux cannot use the same trick, and does not need to. Its trigger is the daemon
-starting, which *does* happen on a service restart, so it has to ask the system
-how long the machine has been up. Windows' trigger is device arrival, which does
-not fire on a restart. The two platforms answer different questions, which is
-why the check is not shared code.
-
-One nice consequence: `PBT_APMRESUMEAUTOMATIC` — the machine waking itself for a
-maintenance task at 3 a.m. — needs no special case. The display stays off, so no
-`ON` is sent. The behaviour falls out of the model instead of being hand-coded.
-
-**Threading.** The service control handler runs on the OS's thread and must
-return immediately, so it only *records* what happened and wakes a worker
-thread, which does the actual sending. Linux needs none of this — sdbus-c++
-dispatches signals on the one thread it is already using.
+**The installer** (`install-service.ps1`) registers the service to start
+automatically, restarts it 5 s after a crash, sets the 60 s shutdown wait,
+turns off USB power-saving for the stick, and creates the log folder. Re-running
+it upgrades in place. `verify-windows.ps1` writes a report on the machine and
+the daemon's log, for comparing machines.
 
 ---
 
 ## 6. Rules that must not be broken
 
-Short list, kept short on purpose. Each one, if broken, re-introduces a bug that
-was already fixed once.
+Each of these, broken, brings back a bug that was already fixed once.
 
-**The model**
-- The TV mirrors the PC's display state. Anything else — suspend, resume,
-  shutdown, boot — is a secondary trigger under that, not a competing policy.
+**Behaviour**
+- On Windows the TV follows the screen; sleep, wake, shutdown and boot are only
+  a backup under that.
+- On Linux power state is the whole signal. Do not add screen watching (§10).
+- Repeated commands are harmless (discrete codes), so the daemon never tracks
+  what it last sent.
 
 **Honesty**
-- `ACK` is sent only after the IR signal has finished transmitting. A `0x0` code
-  answers `ERR`, never `ACK`.
-- Replies are matched to requests by sequence byte, never by timing.
-- A `false` from `send()` must never stop the machine sleeping or shutting down.
+- `ACK` only after the IR has actually been sent. A profile with no code answers
+  `ERR`.
+- Replies are matched by sequence number, never by timing.
+- A failed send must never stop the PC sleeping or shutting down.
 
 **Timing**
-- One timeout for a whole send, and it lives in the transport. Callers do not
-  get to pass a budget; earlier versions let them, and it went wrong in both
-  directions.
-- When no device is enumerated, fail immediately. Retrying is only ever correct
-  for a device that was open a moment ago. A command owed to a device that has
-  not arrived yet waits for the arrival notification, never on a timer.
+- One timeout for a whole send, in the transport. Callers cannot change it.
+- No stick plugged in → fail at once. A command owed to a stick that has not
+  arrived waits for the arrival event, never a timer.
 
-**Threading**
-- `HIDTransport` is single-threaded and holds no lock. On Windows only the
-  worker thread touches it; a control handler records and returns. On Linux the
-  udev callback runs on the same thread as the D-Bus dispatch, which is what
-  keeps that true — moving the device watch onto a thread of its own would make
-  a lock mandatory.
+**One process owns the stick.** Two programs talking to it steal each other's
+replies, and the sequence number cannot tell — the stolen reply is correctly
+numbered, for someone else. The likely cause is running `--console` while the
+service runs. Linux prevents it with the udev group, Windows with a named lock.
+
+**Threading.** The transport is never used from two threads, and has no lock.
+On Linux the udev watch shares the one D-Bus thread; moving it to its own thread
+would make a lock necessary.
 
 **Storage**
-- Flash writes are atomic *and* length-checked. Atomically replacing a file with
-  incomplete content is still corruption.
-- Every index into the profile list is range-checked where it is used.
+- Flash saves are all-or-nothing *and* size-checked.
+- Every lookup of a profile by position is range-checked.
 
-**Only one process may hold the device.** Two programs opening the same HID
-device eat each other's replies — and the sequence byte cannot catch it, because
-the reply is well-formed and correctly numbered, just for somebody else's
-request. The workflow that causes it is the one we built: service running, then
-someone runs the binary with `--console`. Linux is protected by the udev group;
-Windows uses a named mutex.
+**Logging is unbuffered.** Otherwise the last lines before the process is killed
+— including the shutdown `OFF` confirmation — are lost.
 
-**Logging must be unbuffered** (`std::unitbuf`). Otherwise the last lines before
-the process is killed — including the shutdown `OFF` confirmation, the single
-most useful line — are lost.
-
-**Build and unit**
-- The unit's `RestrictAddressFamilies` must keep `AF_NETLINK` alongside
-  `AF_UNIX`, in both the unit file and the NixOS module. Tightening it back to
-  `AF_UNIX` alone silently disables the device watch and loses the boot `ON`,
-  while leaving everything else working — see §5.
-- `ARDUINO_USB_MODE` must be `0`. At `1` the device enumerates as a serial port
-  and the daemon never finds it.
-- The flash partition table is stated explicitly. If a toolchain bump moved the
-  default layout, LittleFS would relocate and every stored IR code would be lost
-  on the next firmware update.
+**Build**
+- The Linux service keeps `AF_NETLINK` in `RestrictAddressFamilies`, in both the
+  unit file and the NixOS module (§5).
+- The firmware builds with `ARDUINO_USB_MODE=0`. At `1` the stick shows up as a
+  serial port and the daemon never finds it.
+- The flash partition table is named explicitly, so a toolchain update can
+  never move the stored profiles.
+- Never name a PowerShell variable `$Pid`: PowerShell reserves `$PID`, and the
+  script fails.
 
 ---
 
-## 7. Building and installing
+## 7. Building and packaging
 
-**The step-by-step lives in [`README.md`](README.md)** — bill of materials,
-wiring, flashing, per-OS install and the service account. It is not repeated
-here, because two copies of an install procedure drift and the README is the one
-a stranger will read. What follows is only what the README does not say.
+Step-by-step instructions are in the [README](README.md), not repeated here.
+What the README does not cover:
 
-**Dependencies.** `sdbus-c++` **2.x** (1.x will not compile — the version is
-asserted in `find_package` so it fails immediately rather than deep in template
-errors), `hidapi`, and `libudev` for the device watch. All three are present on
-any machine that can run the daemon at all, since it already requires systemd.
-
-**The install prefix matters and is easy to get wrong.** `install()` uses
-relative destinations (`lib/udev/rules.d`, `lib/systemd/system`), so the default
-`/usr/local` prefix lands them in `/usr/local/lib/...` — which **neither udev
-nor systemd reads**. The install reports success, then the daemon cannot open
-the device and `systemctl enable` cannot find the unit. The relative paths are
-themselves deliberate, because CPack rebases them when staging a package; the
-cost is that a hand install has to pass `-DCMAKE_INSTALL_PREFIX=/usr`.
-
-**Four packaging routes, one build.** `.deb` and `.rpm` come from CPack via
-GitHub Actions on a `v*` tag; Arch builds from `daemon/packaging/PKGBUILD` on
-the user's own machine; NixOS has a flake and a module
-(`services.esp32-ir-remote.enable = true;`). All four call the project's own
-`CMakeLists.txt` rather than reimplementing the build, so none of them can
-drift from what a source build produces.
-
-**Windows** needs Visual Studio Build Tools and vcpkg's hidapi, and the service
-must be registered by `install-service.ps1` from an elevated PowerShell — a
-plain program is never sent power events. Logs go to
-`C:\ProgramData\ESP32IRRemote\daemon.log`. `verify-windows.ps1` writes a report
-of what the machine is and what the daemon did, for comparing across machines.
+- **Dependencies:** `sdbus-c++` **2.x** (1.x will not compile, and the build
+  says so up front), `hidapi`, and `libudev`. All three come with any system
+  that has systemd, which the daemon needs anyway.
+- **A hand install must use `-DCMAKE_INSTALL_PREFIX=/usr`.** The default,
+  `/usr/local`, puts the udev rule and service file where udev and systemd never
+  look. The install "succeeds" and nothing works. (Packages are unaffected.)
+- **Four routes, one build.** `.deb` and `.rpm` are built by GitHub Actions on
+  a `v*` tag. Arch builds from `daemon/packaging/PKGBUILD` on the user's
+  machine. NixOS uses the flake's module. All four run the same
+  `CMakeLists.txt`.
+- **Which systems the packages suit.** The `.deb` needs Debian 13 or Ubuntu
+  25.04+; Ubuntu 24.04 only has sdbus-c++ 1.x. The `.rpm` is built on Fedora
+  Rawhide and needs Fedora 44+, so it is a preview.
+- **Windows** needs Visual Studio Build Tools and hidapi from vcpkg. The log is
+  `C:\ProgramData\ESP32IRRemote\daemon.log`, moved to `daemon.log.old` past
+  1 MB.
 
 ---
 
 ## 8. Where the project stands
 
-### Working and verified on hardware (Linux)
+### Verified on hardware (Linux, NixOS)
 
-Sleep, wake, shutdown and boot all confirmed on NixOS, the last of them through
-the udev watch. The inhibitor lock held the poweroff off until the ESP32
-confirmed the IR had gone out. The uptime gate was proven both ways.
-Unconfigured-profile handling was proven (Samsung selected, nothing transmitted,
-`Not Configured` on screen).
+- Sleep, wake, shutdown and boot all work. The inhibitor lock held shutdown
+  until the stick confirmed the IR had gone out. Each send took ~120 ms.
+- **Boot:** booted with the stick unplugged, plugged it in 10 s later, and the
+  `ON` went out 190 ms after it appeared. On a normal boot the stick arrives
+  4.5 s after the daemon starts, every time — the boot `ON` used to be lost on
+  every boot, not occasionally.
+- The udev filter matched only the stick among eleven HID devices.
+- The uptime guard works both ways.
+- A profile with no code: nothing sent, `Not Configured` on screen.
+- Idle cost of the daemon: no measurable CPU.
 
-**The boot sequence, from a real journal**, with the stick unplugged at power-on
-and pushed in ten seconds later:
+**If the boot `ON` ever goes missing, read the log first.** `Watching udev for
+the ESP32` means it is working. `udev watch unavailable` means only sleep, wake
+and shutdown are active — and they keep working perfectly, which hides it.
 
-```
-19:58:58.863  [transport] ESP32 not found at startup
-19:58:58.965  [monitor]   Watching udev for the ESP32
-19:58:58.972  [cmd]       ON FAILED — no ACK (startup)
-19:58:58.972  [cmd]       ON deferred until the ESP32 appears
-19:59:09.568  [monitor]   ESP32 appeared
-19:59:09.758  [cmd]       ON sent and ACK received (device ready)
-```
+### Windows: works, less proven
 
-**How far behind the daemon the stick actually is: 4.5 seconds, every boot.**
-Measured across three consecutive normal boots, stick plugged in throughout,
-and it did not vary. This was never a rare race — the boot `ON` was being lost
-every single time. Worth knowing if the design is ever revisited: any fixed
-retry window would need to clear 4.5 s comfortably on this machine alone.
+Compiled on every push. Run as a service on three machines, one of each sleep
+type, and correct in what was tested. But it has had far less use than Linux,
+and it changed after that testing. To re-test, in this order:
 
-Filter precision was checked separately with `udevadm trigger
---subsystem-match=hidraw --action=add`, which fires an `add` for every hidraw
-node. Eleven devices, exactly one `ESP32 appeared` — no false positives from
-the other ten, no missed match on ours.
-
-Sleep, wake and shutdown were re-confirmed *after* the watch was working, so
-they ran through the `poll()` loop rather than the `enterEventLoop()` fallback.
-Each send ACKed in ~122 ms. Idle cost of the loop is nil: 0.0% CPU, no
-measurable CPU time over a hundred seconds.
-
-### Working, less proven (Windows)
-
-Builds in CI on every push. Has been run as a service on three machines covering
-the three sleep models. Behaves correctly in the cases tested, but has had
-nothing like Linux's exercise — and the display-state simplification below
-changes its behaviour on S3 machines, so those need re-testing.
-
-### Needs testing
-
-**If the boot `ON` is ever reported missing again, read the log before anything
-else.** `Watching udev for the ESP32` means the doorbell is live. `udev watch
-unavailable` means the daemon has fallen back to `enterEventLoop()` and the
-whole mechanism is dormant — and because the fallback keeps sleep, wake and
-shutdown working perfectly, nothing else will look wrong. That exact failure
-shipped once and passed a reboot-and-sleep test; §5 has the cause.
-
-**Windows** — all five need the Windows machine:
-
-1. **S3 machine**: an idle screen blank should now turn the TV off. It
-   previously did not. The biggest behaviour change of the lot.
-2. **Stick unplugged**: shutdown should be instant, where it was previously
-   delayed by up to 20 s.
-3. **Normal sleep/wake**: confirm the single 2 s timeout is enough.
-4. **Boot with Fast Startup on** (the default): the TV should come on. This is
-   what `ARRIVAL_GRACE` being measured from service start rather than uptime
-   exists for, and it is the case an uptime-based gate would have silently
-   broken on most machines.
-5. **Replug mid-session**: the TV should *not* change state.
+1. **The installer.** On 2026-09-26 its two USB helper functions were found to
+   fail under PowerShell 7 (a parameter named `$Pid`) and were fixed. Whether
+   Windows' built-in PowerShell hit the same failure is unknown. Check a clean
+   install and an uninstall first.
+2. **Classic-sleep (S3) machine:** an idle screen blank should now turn the TV
+   off. The biggest change.
+3. **Stick unplugged:** shutdown should be instant (it used to wait up to 20 s).
+4. **Normal sleep and wake:** 2 s is enough.
+5. **Boot with Fast Startup on** (the default): the TV comes on.
+6. **Replug later on:** the TV does not change.
 
 ### Not verified
 
-- Boot with "display always on" enabled — the status screen should be up from
-  boot rather than after the first button press.
-- Recovery from a corrupt `profiles.json` — the code path exists, but testing it
-  means flashing a deliberately broken filesystem image. Judged not worth it.
+- Booting with "display always on" set: the status screen should show from
+  boot.
+- Recovering from a corrupt `profiles.json`. The code exists; testing it means
+  flashing a deliberately broken image. Judged not worth it.
 
 ### Known gaps
 
+Things that are wrong or missing now and easy not to notice:
+
 | Gap | Severity |
 |---|---|
-| **Test USB PID `1209:0001`.** A real vendor ID, but a *shared* test PID. Acceptable while the only stick is the author's (§2); must be replaced before any hardware reaches another person. Hand-copied into **five** files. | Medium |
-| **The README Status table needs a pass before tagging.** It says "Releases: None tagged yet", which would ship inside the release contradicting itself. Its Windows and LG-only claims are true now but will age. | Low |
-| **No release guard.** Any `v*` tag publishes a public Release with the packages attached. Nothing checks the version, the PID or anything else first. One mistyped `git push --tags` publishes. | Medium |
-| **A hand install with the default prefix silently half-works.** `cmake --install` without `-DCMAKE_INSTALL_PREFIX=/usr` puts the udev rule and unit under `/usr/local/lib/`, which nothing reads. Documented in §7, but a `message(WARNING)` in `CMakeLists.txt` when the prefix is not `/usr` would catch it at the point of the mistake. | Medium |
-| **No profile for TCL or Hisense** — no usable discrete codes appear to exist for either brand. Not fixable from a database; it needs somebody with the TV in front of them. Those users add a profile by hand. See §4. | Low |
-| **Samsung, Sony and Toshiba codes are unverified on hardware.** Derived from corroborated sources and cross-checked against the encoder, but nobody has pointed the stick at one of those TVs. | Medium |
-| **Linux does not watch display state.** Your screen blanks, the TV stays on. Now that the whole project is framed as mirroring the display, this is a real inconsistency rather than a design choice. | Medium |
-| **Windows service runs as LocalSystem.** Linux runs unprivileged; Windows should move to LocalService to match. | Medium |
-| CI does not build the firmware — only the daemon. | Medium |
-| A cancelled shutdown does not re-take the Linux inhibitor lock, so the next sleep goes undelayed. Needs the cancel to land in a sub-second window; a sleep/wake cycle repairs it. | Low |
-| WiFi AP password is hardcoded. Better: derive it per-device from the chip ID and show it on the OLED. | Low |
-| The web server serves any file on LittleFS, including `profiles.json`. Harmless today. | Low |
+| **Before any stick goes to someone else:** it still uses the shared test USB ID (§2), and every stick has the same WiFi password. The password should come from the chip ID and show on the screen. | Medium |
+| **Only the LG codes are proven.** Samsung, Sony and Toshiba have never been tried on a real TV (§4). | Medium |
+| **Any `v*` tag publishes a public release**, and nothing checks anything first. | Medium |
+| **The Windows service runs as LocalSystem**, the most privileged account. Linux runs unprivileged. | Medium |
+| **A hand install without `-DCMAKE_INSTALL_PREFIX=/usr` silently half-works** (§7). A CMake warning would catch it at the moment of the mistake. | Medium |
 
 ---
 
 ## 9. What to do next
 
-In the order that gets the project finished.
+**Tagging publishes.** A `v*` tag makes a public GitHub Release with the
+packages attached. Everything is at `1.0.0` and nothing blocks the tag; first
+update the README Status table, which still says "None tagged yet". The items
+below are improvements, not blockers.
 
-**Tagging is the act of publishing, not a bookmark.** `packages.yml` triggers on
-any `v*` tag and puts out a **public GitHub Release** with the `.deb` and `.rpm`
-attached. There are no tags yet. Everything is staged at `1.0.0`, and as of the
-udev watch being verified on hardware (§8) **nothing is holding the tag back**.
-The remaining items below are all improvements rather than blockers.
+1. **Try the Samsung, Sony and Toshiba codes on real TVs.** Samsung matters
+   most: the most common brand, and the sleep risk in §4.
+2. **Apply to pid.codes for a product ID.** It is a pull request reviewed by
+   volunteers, so start early. When it arrives, change all five copies (§2) in
+   one commit.
+3. **Re-test Windows** against the six checks in §8, then move the service to
+   LocalService. The installer already prepares the log folder for it; the open
+   question is whether that account can open the stick, which is very likely.
+   Test with `sc.exe config esp32-ir-remote obj= "NT AUTHORITY\LocalService"`.
+4. **Build the firmware in CI.** Today CI only compiles the daemon.
 
-Releasing on the test PID was weighed and accepted — the prohibition binds on
-redistributing hardware, and only daemon packages ship (§2). A real PID is
-still item 2 below.
-
-1. **Verify the new codes on real TVs** if any are within reach — Samsung, Sony
-   and Toshiba are all derived rather than tested. A Samsung is the one most
-   worth finding, both because it is the most common brand and because of the
-   deep-sleep caveat in §4.
-
-2. **Apply to pid.codes for a product ID** — a pull request to their repository,
-   needing only a public repo with an open-source licence, so it can go in at any
-   time and run in parallel with everything else. Start it early: it is reviewed
-   by volunteers, so the turnaround is not yours to control. Then
-   generate the five copies from one source so the count cannot go 5 → 6. See
-   §2 for why a placeholder is not an acceptable substitute.
-
-3. **Re-test Windows** against the three cases in §8, then move the service to
-   LocalService. The installer already grants LOCAL SERVICE rights on the log
-   directory, so the only open question is whether that account can open the HID
-   device — and the vendor usage page (`0xFF00`) is not one Windows restricts,
-   so it very likely can. Test with
-   `sc.exe config esp32-ir-remote obj= "NT AUTHORITY\LocalService"`.
-
-4. **Add display-state watching on Linux**, closing the inconsistency in §8.
-
-5. Add the firmware to CI.
-
-### Worth considering, not required
-
-**An IR receiver.** A VS1838B costs about £1 and one more GPIO. With it, the web
-UI could have a "learn" button: point your remote at the stick, press power, and
-it captures the code. `IRremoteESP8266` already includes the decoder, so this is
-mostly UI work. It would turn "works if you can find hex codes for your TV" into
-"works for anyone" — the single biggest improvement available to the product.
+**Worth considering: an IR receiver.** A ~£1 VS1838B on one more pin would let
+the web page "learn" codes: point your remote at the stick and press power. The
+IR library already decodes. That would turn "works if you can find codes for
+your TV" into "works for anyone" — the biggest improvement available.
 
 ---
 
 ## 10. Decisions taken, and why
 
-Reviewed 2026-09-09. Kept as-is, with the reasoning, so they are not re-litigated:
+Things that look removable, improvable or missing, and are not. Read before
+"tidying" any of them.
 
-- **The sequence byte stays.** One byte, ~6 lines, prevents a stale `ACK` being
-  read as confirmation of a different command. See §3.
-- **`ERR` stays.** ~7 lines, and it turns a misleading two-second timeout into
-  an instant accurate log line. If it is ever removed, `ACK` must *not* start
-  meaning "received" — instead make an uncoded profile unselectable, so the
-  failure cannot occur.
-- **The length check on flash writes stays.** It guards against truncated
-  writes, not against bad user input. See §4.
-- **The Windows named mutex stays.** A registered VID/PID does not address it;
-  those are different problems.
-- **Exact dependency pins and the explicit partition table stay.** The partition
-  one protects stored IR codes across a firmware update.
-- **The Linux uptime gate stays**, on the strength of the 3 a.m. unattended
-  upgrade case.
-- **Linux and Windows deliberately measure different clocks**, and the check is
-  not shared code. Unifying them looks like an obvious tidy-up and is wrong —
-  see §5. It was tried and reverted.
+- **The sequence number stays.** Without it a late `ACK` gets taken as the
+  reply to the next command (§3).
+- **`ERR` stays.** It turns a confusing two-second timeout into an instant,
+  accurate log line. If it were ever removed, `ACK` must not start meaning
+  "received"; make a profile with no code unselectable instead.
+- **The Windows single-instance lock stays** even with a real USB ID. A unique
+  ID does not stop two programs on the same PC opening the stick.
+- **The boot `ON` guards stay, and stay different per platform.** Linux checks
+  uptime, or a 3 a.m. package upgrade restarting the service turns the TV on.
+  Windows times from service start, because Fast Startup makes uptime
+  meaningless. Merging them into shared code looks tidy and is wrong; it was
+  tried and reverted (§5).
+- **A cancelled shutdown is not handled on Linux.** A normal cancel
+  (`shutdown -c`) happens before logind announces anything, so the daemon never
+  sees it. The only case that matters is logind announcing the shutdown and
+  then calling it off, in the ~120 ms the daemon holds the lock while sending
+  `OFF`. That only happens when the shutdown fails to start at all. Even then,
+  the first sleep and wake afterwards puts everything right. The fix would be
+  three lines that could never be tested on real hardware.
+- **Both services restart forever after a crash, 5 s apart.** Windows repeats
+  its last restart action indefinitely, and systemd's limit (5 failures in
+  10 s) is never reached at 5 s intervals. The two platforms already match.
+- **The five copies of the USB ID are not generated from one source.** Once the
+  real ID arrives it changes once and never again. Generating it would mean
+  build steps in PlatformIO, CMake and PowerShell for a one-time edit; the
+  table in §2 is enough.
+- **The web server may serve `profiles.json` directly.** The setup page already
+  hands out the same data through `/api/profiles`, so blocking the file would
+  protect nothing.
+- **Linux follows power state, not the screen** (2026-09-26). The two ways to
+  watch the screen were both rejected:
+  - *Read the display power state from the kernel.* Works on every desktop, but
+    the kernel gives no notification, so it must be polled; it reads hardware
+    beneath the desktop rather than asking it; and the NVIDIA driver may not
+    keep it current.
+  - *Ask the desktop.* The proper way, but GNOME, KDE and the wlroots family
+    (Hyprland, Sway…) each do it differently, and the system service cannot
+    reach any of them. It would need a helper in every user session, a
+    locked-down D-Bus interface, and changes to all four packages — roughly
+    500–800 lines.
+
+  The cost is an idle blank without sleep, where the TV stays on. Sleep, wake,
+  shutdown and boot — most real use — behave the same on both platforms, and
+  setting the desktop to sleep when idle covers most of the rest. (DPMS itself
+  cannot help: it is the graphics card stopping the signal. Monitors sleep on
+  that and TVs do not, which is why this project exists.)
 
 ---
 
 ## 11. Still open
 
-Deferred by decision, not forgotten. None of these block a release.
+Deferred on purpose. Neither blocks a release.
 
-- **A second serial transport**, for ESP32 boards without native USB.
-  `ITransport` is exactly the right seam, and the old implementation is in git
-  history (removed 2026-09-09) as a starting point. But the serial I/O is not
-  the work: **finding the device is.** A board without native USB is seen through a CP2102 or CH340
-  bridge whose VID/PID (`10c4:ea60`, `1a86:7523`) is shared with thousands of
-  unrelated devices, so there is nothing to match on. It needs either a config
-  file naming the port or an identify-handshake across candidate ports, plus a
-  second firmware build variant, a `dialout` udev rule, and a relaxed systemd
-  sandbox. Perhaps 150 lines for the config-file version.
-
-- **Whether the Windows service should stop retrying eventually**, rather than
-  restarting forever. Currently `restart/5000` three times with a daily reset.
-
-- **Panasonic support** — a major brand in the UK with published discrete codes,
-  but Panasonic is a 48-bit protocol and `Profile.onCode` is `uint32_t`, so it
-  needs the code fields widened as well as a new protocol. Explicitly dropped
-  for now.
-
-- **Display-state watching on Linux** — the last real feature gap. Deferred, not
-  rejected; see §8.
+- **A serial version**, for ESP32 boards without native USB. The transport
+  interface is the right place for it, and the old code is in git history. The
+  hard part is finding the device: those boards use common USB-serial chips
+  whose IDs thousands of other gadgets share. It needs a config file naming the
+  port (or probing each port), a second firmware build, and a looser Linux
+  sandbox. Perhaps 150 lines.
+- **Panasonic.** A major UK brand with published discrete codes, but its
+  protocol uses 48-bit codes and profiles hold 32 bits. Dropped for now.

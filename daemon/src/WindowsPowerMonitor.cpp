@@ -32,7 +32,7 @@ static VOID WINAPI ServiceMain(DWORD argc, LPWSTR* argv) {
 }
 
 static DWORD WINAPI ServiceCtrlHandlerEx(DWORD control, DWORD eventType,
-                                         LPVOID eventData, LPVOID ) {
+                                         LPVOID eventData, LPVOID) {
     if (!g_instance) return ERROR_CALL_NOT_IMPLEMENTED;
     return g_instance->serviceCtrlHandler(control, eventType, eventData);
 }
@@ -106,7 +106,6 @@ const char* WindowsPowerMonitor::reasonFor(Trigger why, bool on) {
 }
 
 void WindowsPowerMonitor::run() {
-
     SERVICE_TABLE_ENTRYW dispatchTable[] = {
         { const_cast<LPWSTR>(SERVICE_NAME), ServiceMain },
         { nullptr, nullptr }
@@ -116,7 +115,6 @@ void WindowsPowerMonitor::run() {
 
     const DWORD err = GetLastError();
     if (err == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT) {
-
         std::cerr << "[monitor] Not started by the Service Control Manager.\n"
                      "[monitor] Power events are only delivered to a service. Install with\n"
                      "[monitor] packaging/windows/install-service.ps1, or pass --console to\n"
@@ -126,8 +124,7 @@ void WindowsPowerMonitor::run() {
     }
 }
 
-void WindowsPowerMonitor::serviceMain(DWORD , LPWSTR* ) {
-
+void WindowsPowerMonitor::serviceMain(DWORD, LPWSTR*) {
     serviceStartedAt_ = std::chrono::steady_clock::now();
 
     statusHandle_ = RegisterServiceCtrlHandlerExW(SERVICE_NAME, ServiceCtrlHandlerEx, nullptr);
@@ -149,7 +146,6 @@ void WindowsPowerMonitor::serviceMain(DWORD , LPWSTR* ) {
     }
 
     {
-
         std::lock_guard<std::mutex> lock(statusMutex_);
         status_.dwControlsAccepted = SERVICE_ACCEPT_STOP
                                    | SERVICE_ACCEPT_PRESHUTDOWN
@@ -165,7 +161,6 @@ void WindowsPowerMonitor::serviceMain(DWORD , LPWSTR* ) {
         DEVICE_NOTIFY_SERVICE_HANDLE);
 
     if (!displayNotify_) {
-
         std::cerr << "[monitor] RegisterPowerSettingNotification failed: " << GetLastError()
                   << " — falling back to suspend/resume events only. An idle screen\n"
                      "[monitor] blank and the ON at boot will not be seen in this mode.\n";
@@ -182,7 +177,6 @@ void WindowsPowerMonitor::serviceMain(DWORD , LPWSTR* ) {
             DEVICE_NOTIFY_SERVICE_HANDLE);
 
         if (!deviceNotify_) {
-
             std::cerr << "[monitor] RegisterDeviceNotification failed: " << GetLastError()
                       << " — device arrival and removal will not be seen. The transport\n"
                          "[monitor] still recovers by reopening on a failed write.\n";
@@ -265,7 +259,6 @@ void WindowsPowerMonitor::logAwayTime() {
 
 DWORD WindowsPowerMonitor::serviceCtrlHandler(DWORD control, DWORD eventType, LPVOID eventData) {
     switch (control) {
-
     case SERVICE_CONTROL_INTERROGATE: {
         std::lock_guard<std::mutex> lock(statusMutex_);
         SetServiceStatus(statusHandle_, &status_);
@@ -294,16 +287,13 @@ DWORD WindowsPowerMonitor::serviceCtrlHandler(DWORD control, DWORD eventType, LP
 
     case SERVICE_CONTROL_POWEREVENT:
         switch (eventType) {
-
         case PBT_APMSUSPEND:
-
             plog("PBT_APMSUSPEND (sleep or hibernate)");
             suspendWallAt_ = std::chrono::system_clock::now();
             requestState(false, Trigger::Suspend);
             return NO_ERROR;
 
         case PBT_APMRESUMESUSPEND:
-
             logAwayTime();
             if (lastDisplayState_.has_value() && !*lastDisplayState_) {
                 plog("PBT_APMRESUMESUSPEND while display is known off — not asserting on");
@@ -314,13 +304,11 @@ DWORD WindowsPowerMonitor::serviceCtrlHandler(DWORD control, DWORD eventType, LP
             return NO_ERROR;
 
         case PBT_APMRESUMEAUTOMATIC:
-
             logAwayTime();
             plog("PBT_APMRESUMEAUTOMATIC (resume, presence unknown) — not acted on");
             return NO_ERROR;
 
         case PBT_APMRESUMECRITICAL:
-
             logAwayTime();
             plog("PBT_APMRESUMECRITICAL (resume after unannounced power loss) — not acted on");
             return NO_ERROR;
@@ -340,7 +328,6 @@ DWORD WindowsPowerMonitor::serviceCtrlHandler(DWORD control, DWORD eventType, LP
 
             switch (state) {
             case DISPLAY_OFF:
-
                 // Unconditional. Windows has already blanked every display,
                 // the TV among them, so there is no screen left to black out
                 // by acting on this — only one left showing black.
@@ -349,14 +336,12 @@ DWORD WindowsPowerMonitor::serviceCtrlHandler(DWORD control, DWORD eventType, LP
                 requestState(false, Trigger::DisplayState);
                 break;
             case DISPLAY_ON:
-
                 plog("display state = on");
                 logAwayTime();
                 lastDisplayState_ = true;
                 requestState(true, Trigger::DisplayState);
                 break;
             case DISPLAY_DIMMED:
-
                 plog("display state = dimmed (treated as on)");
                 lastDisplayState_ = true;
                 requestState(true, Trigger::DisplayState);
@@ -374,14 +359,11 @@ DWORD WindowsPowerMonitor::serviceCtrlHandler(DWORD control, DWORD eventType, LP
         }
 
     default:
-
         return ERROR_CALL_NOT_IMPLEMENTED;
     }
 }
 
-
 void WindowsPowerMonitor::requestState(bool on, Trigger why) {
-
     desiredOn_ = on;
 
     {
@@ -414,7 +396,6 @@ void WindowsPowerMonitor::requestDeviceInvalidate() {
 }
 
 void WindowsPowerMonitor::workerLoop() {
-
     {
         std::unique_lock<std::mutex> lock(queueMutex_);
         queueCv_.wait_for(lock, INITIAL_STATE_WAIT, [this] {
@@ -422,7 +403,6 @@ void WindowsPowerMonitor::workerLoop() {
         });
 
         if (!pendingOn_.has_value()) {
-
             plog("no display state reported at registration — opening state "
                  "UNKNOWN, asserting nothing");
             plog("  the TV will be driven from the first display-state change");
@@ -462,7 +442,6 @@ void WindowsPowerMonitor::workerLoop() {
         }
 
         if (doShutdown) {
-
             std::cout << "[event] Shutting down\n";
             reportPending();
             if (onCommand_) {
@@ -531,7 +510,6 @@ void WindowsPowerMonitor::reportStatus(DWORD state, DWORD exitCode) {
 }
 
 void WindowsPowerMonitor::reportPending() {
-
     std::lock_guard<std::mutex> lock(statusMutex_);
     if (status_.dwCurrentState != SERVICE_STOP_PENDING &&
         status_.dwCurrentState != SERVICE_START_PENDING) {
