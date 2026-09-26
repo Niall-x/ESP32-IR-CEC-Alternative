@@ -115,9 +115,9 @@ function Remove-DaemonService {
 # Left behind, they would keep suppressing selective suspend for a device whose
 # daemon is gone — a machine quietly carrying a setting nothing on it explains.
 function Reset-UsbSelectiveSuspend {
-    param([string]$Vid, [string]$Pid)
+    param([string]$VendorHex, [string]$ProductHex)
 
-    $hardwareKey = "VID_$Vid&PID_$Pid"
+    $hardwareKey = "VID_$VendorHex&PID_$ProductHex"
     $enumRoot    = "HKLM:\SYSTEM\CurrentControlSet\Enum\USB"
     $cleared     = 0
 
@@ -145,7 +145,7 @@ if ($Uninstall) {
         Write-Host "No service named '$ServiceName' was installed."
     }
 
-    $cleared = Reset-UsbSelectiveSuspend -Vid $VendorId -Pid $ProductId
+    $cleared = Reset-UsbSelectiveSuspend -VendorHex $VendorId -ProductHex $ProductId
     if ($cleared -gt 0) {
         Write-Host "Cleared $cleared selective-suspend registry value(s)."
     }
@@ -250,9 +250,9 @@ New-ItemProperty -Path $key -Name "PreshutdownTimeout" `
 # values for the hardware ID, which arrives with the driver package and code
 # signing already listed as gaps.
 function Disable-UsbSelectiveSuspend {
-    param([string]$Vid, [string]$Pid)
+    param([string]$VendorHex, [string]$ProductHex)
 
-    $hardwareKey = "VID_$Vid&PID_$Pid"
+    $hardwareKey = "VID_$VendorHex&PID_$ProductHex"
     $enumRoot    = "HKLM:\SYSTEM\CurrentControlSet\Enum\USB"
 
     # Collected first, then written. A counter incremented inside a piped
@@ -278,7 +278,7 @@ function Disable-UsbSelectiveSuspend {
     return $paramKeys.Count
 }
 
-$suspendApplied = Disable-UsbSelectiveSuspend -Vid $VendorId -Pid $ProductId
+$suspendApplied = Disable-UsbSelectiveSuspend -VendorHex $VendorId -ProductHex $ProductId
 if ($suspendApplied -gt 0) {
     Write-Host "Disabled USB selective suspend on $suspendApplied device instance(s)."
     Write-Host "Unplug and replug the ESP32 for that to take effect."
