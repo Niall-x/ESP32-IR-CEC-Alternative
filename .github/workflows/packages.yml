@@ -1,6 +1,7 @@
 name: Packages
 
-# Every push: compile the daemon on Linux and Windows.
+# Every push: compile the daemon on Linux and Windows, check the Windows
+# scripts parse, and build both firmware images.
 # A v* tag: also build the .deb and .rpm and publish a public GitHub Release.
 # Packages are built in containers that ship sdbus-c++ 2.x.
 
@@ -15,34 +16,77 @@ jobs:
   windows-build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install hidapi via vcpkg
         run: vcpkg install hidapi:x64-windows
 
+      # The generator is left to CMake, so a runner image moving to a newer
+      # Visual Studio cannot break the build. Quoted, or PowerShell passes
+      # $env:... through unexpanded.
       - name: Configure
-        run: >
-          cmake -B daemon/build -S daemon -G "Visual Studio 17 2022" -A x64
-          -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake
-          -DVCPKG_TARGET_TRIPLET=x64-windows
+        run: |
+          $root = $env:VCPKG_INSTALLATION_ROOT
+          if (-not $root) { $root = Split-Path (Get-Command vcpkg).Source }
+          cmake -B daemon/build -S daemon `
+                "-DCMAKE_TOOLCHAIN_FILE=$root/scripts/buildsystems/vcpkg.cmake" `
+                -DVCPKG_TARGET_TRIPLET=x64-windows
 
       - name: Build
         run: cmake --build daemon/build --config Release
+
+      - name: Parse the PowerShell scripts
+        run: |
+          $failed = $false
+          foreach ($f in Get-ChildItem daemon/packaging/windows/*.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $f.FullName, [ref]$null, [ref]$errors) | Out-Null
+            foreach ($e in $errors) { Write-Error "$($f.Name): $e"; $failed = $true }
+          }
+          if ($failed) { exit 1 }
 
   linux-build:
     runs-on: ubuntu-latest
     container: debian:trixie
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build dependencies
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            cmake g++ pkg-config libsdbus-c++-dev libhidapi-dev libudev-dev
+            cmake make g++ pkg-config libsdbus-c++-dev libhidapi-dev libudev-dev
       - name: Configure and build
         run: |
-          cmake -B daemon/build -S daemon
+          cmake -B daemon/build -S daemon -DCMAKE_INSTALL_PREFIX=/usr
           cmake --build daemon/build
+
+  firmware-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.platformio
+          key: platformio-${{ hashFiles('firmware/platformio.ini', 'tools/hid-test/firmware/platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build the firmware and the web UI image
+        working-directory: firmware
+        run: |
+          pio run
+          pio run -t buildfs
+
+      - name: Build the HID test firmware
+        working-directory: tools/hid-test/firmware
+        run: pio run
 
   deb:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -50,13 +94,13 @@ jobs:
     # Not the bare runner: Ubuntu 24.04 still ships sdbus-c++ 1.x.
     container: debian:trixie
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            cmake g++ pkg-config file \
+            cmake make g++ pkg-config file \
             libsdbus-c++-dev libhidapi-dev libudev-dev
 
       - name: Build
@@ -72,7 +116,7 @@ jobs:
           dpkg-deb --info    daemon/build/*.deb
           dpkg-deb --contents daemon/build/*.deb
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: deb
           path: daemon/build/*.deb
@@ -85,12 +129,12 @@ jobs:
     container: fedora:rawhide
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: |
           dnf install -y --setopt=install_weak_deps=False \
-            cmake gcc-c++ pkgconf-pkg-config rpm-build \
+            cmake make gcc-c++ pkgconf-pkg-config rpm-build \
             sdbus-cpp-devel hidapi-devel systemd-devel
 
       - name: Build
@@ -106,21 +150,22 @@ jobs:
           rpm -qip daemon/build/*.rpm
           rpm -qlp daemon/build/*.rpm
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rpm
           path: daemon/build/*.rpm
 
   release:
-    needs: [deb, rpm]
+    # Nothing is published unless every build on the tag passed.
+    needs: [windows-build, linux-build, firmware-build, deb, rpm]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/**/*.{deb,rpm}

@@ -11,8 +11,8 @@
 #include "USB.h"
 #include "USBHID.h"
 #include "esp_task_wdt.h"
+#include "freertos/queue.h"
 
-#include "tusb.h"
 #include "Profiles.h"
 #include "Button.h"
 #include "Display.h"
@@ -30,12 +30,9 @@
 #define DEVICE_PID  0x0001
 #define REPORT_SIZE    64
 
-#define WIFI_SSID  "ESP32-IR-Remote"
-#define WIFI_PASS  "irremote123"
-
-// Reboots the stick if loop() stops running. Sized by the web server, which can
-// legitimately block for ~12s when a browser stalls mid-request.
-#define WDT_TIMEOUT_SECONDS 20
+// Restarts the stick if loop() stops running. Sized by the web server, which
+// can legitimately block for ~12s when a browser stalls mid-request.
+#define WDT_TIMEOUT_MS 20000
 
 static const uint8_t REPORT_DESCRIPTOR[] = {
     0x06, 0x00, 0xFF,
@@ -67,10 +64,17 @@ bool    wifiActive = false;
 
 uint8_t pressCount = 0;
 
+struct Report {
+    uint8_t bytes[REPORT_SIZE];
+};
+
+// Reports arrive on the USB task and are handled in loop(), so they cross
+// threads through a queue rather than a shared buffer. The daemon has one
+// command outstanding at a time; the spare slots only absorb a retry.
+static QueueHandle_t rxQueue;
+
 class VendorHID : public USBHIDDevice {
 public:
-    VendorHID() {}
-
     void begin() { HID.addDevice(this, sizeof(REPORT_DESCRIPTOR)); }
 
     uint16_t _onGetDescriptor(uint8_t* dst) override {
@@ -78,55 +82,22 @@ public:
         return sizeof(REPORT_DESCRIPTOR);
     }
 
-    void _onOutput(uint8_t report_id, const uint8_t* buffer, uint16_t len) override {
+    void _onOutput(uint8_t, const uint8_t* buffer, uint16_t len) override {
         if (len < 2) return;
 
-        uint16_t copyLen = min((int)len, REPORT_SIZE - 1);
-        memcpy(rxBuf_, buffer, copyLen);
-        rxBuf_[copyLen] = '\0';
-        received_ = true;
+        Report r = {};
+        memcpy(r.bytes, buffer, min((int)len, REPORT_SIZE - 1));
+        if (xQueueSend(rxQueue, &r, 0) != pdTRUE) {
+            Serial.println("[hid] Command queue full — report dropped");
+        }
     }
 
     bool send(const uint8_t* data) {
         return HID.SendReport(0, data, REPORT_SIZE);
     }
-
-    volatile bool received_     = false;
-    uint8_t rxBuf_[REPORT_SIZE] = {0};
 };
 
 VendorHID hidDevice;
-
-volatile bool usbResumePending = false;
-volatile bool usbWasSuspended  = false;
-
-static void onUsbEvent(void*, esp_event_base_t,
-                       int32_t id, void*) {
-    switch (id) {
-    case ARDUINO_USB_SUSPEND_EVENT:
-        usbWasSuspended = true;
-        break;
-    case ARDUINO_USB_RESUME_EVENT:
-        if (usbWasSuspended) {
-            usbWasSuspended  = false;
-            usbResumePending = true;
-        }
-        break;
-    default:
-        break;
-    }
-}
-
-static void serviceUsbRecovery() {
-    if (!usbResumePending) return;
-    usbResumePending = false;
-
-    Serial.println("[usb] Resumed from suspend — re-enumerating");
-
-    tud_disconnect();
-    delay(100);
-    tud_connect();
-}
 
 bool sendIR(const Profile& profile, bool on) {
     if (!Profiles::isConfigured(profile, on)) {
@@ -154,15 +125,16 @@ bool sendIR(const Profile& profile, bool on) {
     return true;
 }
 
-void stopWifi();
+// Unique per stick, so two sticks in one house never share a network name.
+static String wifiSsid() {
+    char ssid[32];
+    snprintf(ssid, sizeof(ssid), "ESP32-IR-Remote-%04X",
+             (unsigned)(ESP.getEfuseMac() >> 32) & 0xFFFF);
+    return String(ssid);
+}
 
-void startWifi() {
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(WIFI_SSID, WIFI_PASS);
-    String apIP = WiFi.softAPIP().toString();
-    Serial.printf("[wifi] AP started — SSID: %s  IP: %s\n", WIFI_SSID, apIP.c_str());
-    display.setWifiIP(apIP);
-
+// Registered once. The handlers only answer while the server is running.
+void registerRoutes() {
     server.on("/api/profiles", HTTP_GET, []() {
         JsonDocument doc;
         JsonArray arr = doc.to<JsonArray>();
@@ -252,20 +224,32 @@ void startWifi() {
         String path = server.uri();
         if (path == "/") path = "/index.html";
 
-        if (LittleFS.exists(path)) {
-            String contentType = "text/plain";
-            if      (path.endsWith(".html")) contentType = "text/html";
-            else if (path.endsWith(".css"))  contentType = "text/css";
-            else if (path.endsWith(".js"))   contentType = "application/javascript";
-            else if (path.endsWith(".json")) contentType = "application/json";
-
-            File f = LittleFS.open(path, "r");
-            server.streamFile(f, contentType);
-            f.close();
-        } else {
+        // Only the page itself. The JSON files are reached through the API.
+        if (path != "/index.html" || !LittleFS.exists(path)) {
             server.send(404, "text/plain", "Not Found");
+            return;
         }
+
+        File f = LittleFS.open(path, "r");
+        server.streamFile(f, "text/html");
+        f.close();
     });
+}
+
+// Used only by a stick built without the screen, which has no way to show its
+// own password. Documented in the README.
+#define FALLBACK_WIFI_PASSWORD "irremote123"
+
+void startWifi() {
+    const String ssid = wifiSsid();
+    const String pass = display.present() ? Profiles::getSettings().wifiPassword
+                                          : String(FALLBACK_WIFI_PASSWORD);
+
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(ssid.c_str(), pass.c_str());
+    String apIP = WiFi.softAPIP().toString();
+    Serial.printf("[wifi] AP started — SSID: %s  IP: %s\n", ssid.c_str(), apIP.c_str());
+    display.setWifiInfo(ssid, pass, apIP);
 
     server.begin();
     Serial.println("[wifi] Web server started on port 80");
@@ -347,8 +331,40 @@ void onFactoryReset() {
     finishExitWifi();
 }
 
+static void handleReport(const Report& r) {
+    const uint8_t seq = r.bytes[0];
+
+    String cmd = String((const char*)r.bytes + 1);
+    cmd.trim();
+
+    const bool alwaysOn = Profiles::getSettings().displayAlwaysOn || wifiActive;
+    const Profile& active = Profiles::getActive();
+
+    uint8_t response[REPORT_SIZE] = {0};
+    response[0] = seq;
+
+    bool ok = false;
+    if (cmd == "ON" || cmd == "OFF") {
+        const bool on = (cmd == "ON");
+        ok = sendIR(active, on);
+        if (ok) {
+            display.showIRConfirm(on, alwaysOn, active.name);
+        } else {
+            display.showNotConfigured(alwaysOn, active.name);
+        }
+    }
+
+    memcpy(response + 1, ok ? "ACK" : "ERR", 3);
+
+    if (!hidDevice.send(response)) {
+        Serial.println("[hid] Failed to queue response report");
+    }
+}
+
 void setup() {
     Serial.begin(115200);
+
+    rxQueue = xQueueCreate(4, sizeof(Report));
 
     if (!Profiles::begin()) {
         Serial.println("[app] Profile storage unavailable — using fallback profile");
@@ -376,32 +392,32 @@ void setup() {
                        Profiles::getSettings().displayAlwaysOn);
 
     irSend.begin();
+    registerRoutes();
 
     hidDevice.begin();
+    HID.begin();
     USB.VID(DEVICE_VID);
     USB.PID(DEVICE_PID);
     USB.productName("ESP32 IR Remote");
     USB.manufacturerName("ESP32-IR-CEC");
-
-    USB.onEvent(ARDUINO_USB_SUSPEND_EVENT, onUsbEvent);
-    USB.onEvent(ARDUINO_USB_RESUME_EVENT, onUsbEvent);
-
     USB.begin();
-    HID.begin();
 
-    // Armed last, so first-boot flash formatting never has to fit the timeout.
-    esp_task_wdt_init(WDT_TIMEOUT_SECONDS, true);
-    esp_task_wdt_add(NULL);
-    Serial.printf("[wdt] Watchdog armed (%ds)\n", WDT_TIMEOUT_SECONDS);
+    // The core starts the task watchdog with a 5s timeout and feeds it after
+    // every loop(); this lengthens the timeout and puts loop() under it. Armed
+    // last, so first-boot flash formatting never has to fit the timeout.
+    const esp_task_wdt_config_t wdt = {
+        .timeout_ms     = WDT_TIMEOUT_MS,
+        .idle_core_mask = 1 << 0,
+        .trigger_panic  = true,
+    };
+    esp_task_wdt_reconfigure(&wdt);
+    enableLoopWDT();
+    Serial.printf("[wdt] Watchdog armed (%ds)\n", WDT_TIMEOUT_MS / 1000);
 }
 
 void loop() {
-    esp_task_wdt_reset();
-
     button.update();
     display.update();
-
-    serviceUsbRecovery();
 
     if (wifiActive) {
         server.handleClient();
@@ -411,34 +427,8 @@ void loop() {
         finishExitWifi();
     }
 
-    if (!hidDevice.received_) return;
-    hidDevice.received_ = false;
-
-    const uint8_t seq = hidDevice.rxBuf_[0];
-
-    String cmd = String((char*)hidDevice.rxBuf_ + 1);
-    cmd.trim();
-
-    const bool alwaysOn = Profiles::getSettings().displayAlwaysOn || wifiActive;
-    const Profile& active = Profiles::getActive();
-
-    uint8_t response[REPORT_SIZE] = {0};
-    response[0] = seq;
-
-    bool ok = false;
-    if (cmd == "ON" || cmd == "OFF") {
-        const bool on = (cmd == "ON");
-        ok = sendIR(active, on);
-        if (ok) {
-            display.showIRConfirm(on, alwaysOn, active.name);
-        } else {
-            display.showNotConfigured(alwaysOn, active.name);
-        }
-    }
-
-    memcpy(response + 1, ok ? "ACK" : "ERR", 3);
-
-    if (!hidDevice.send(response)) {
-        Serial.println("[hid] Failed to queue response report");
+    Report r;
+    while (xQueueReceive(rxQueue, &r, 0) == pdTRUE) {
+        handleReport(r);
     }
 }

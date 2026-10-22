@@ -4,11 +4,10 @@ project(hid-test LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# hidapi-hidraw uses the Linux hidraw kernel interface directly.
-# hidapi-libusb is the alternative but requires libusb and extra permissions.
+# hidapi-hidraw uses the Linux hidraw kernel interface directly. The imported
+# target carries the library path, which some distros need.
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(HIDAPI REQUIRED hidapi-hidraw)
+pkg_check_modules(HIDAPI REQUIRED IMPORTED_TARGET hidapi-hidraw)
 
 add_executable(hid-test src/main.cpp)
-target_include_directories(hid-test PRIVATE ${HIDAPI_INCLUDE_DIRS})
-target_link_libraries(hid-test PRIVATE ${HIDAPI_LIBRARIES})
+target_link_libraries(hid-test PRIVATE PkgConfig::HIDAPI)

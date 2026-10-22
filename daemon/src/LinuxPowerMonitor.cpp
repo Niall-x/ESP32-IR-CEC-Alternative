@@ -84,8 +84,9 @@ bool LinuxPowerMonitor::startDeviceWatch() {
         return false;
     }
 
-    if (udev_monitor_filter_add_match_subsystem_devtype(deviceWatch_, "hidraw", nullptr) < 0) {
-        std::cerr << "[monitor] Could not filter the udev monitor to hidraw\n";
+    if (udev_monitor_filter_add_match_subsystem_devtype(deviceWatch_, "hidraw", nullptr) < 0 ||
+        udev_monitor_filter_add_match_subsystem_devtype(deviceWatch_, "usb", "usb_device") < 0) {
+        std::cerr << "[monitor] Could not filter the udev monitor to hidraw and usb\n";
         stopDeviceWatch();
         return false;
     }
@@ -193,14 +194,38 @@ void LinuxPowerMonitor::resetDevice() {
     udev_unref(ctx);
 }
 
+// A removal cannot be matched like an arrival: by the time it is reported the
+// sysfs entries isOurDevice() reads are gone. The usb_device's own event still
+// carries PRODUCT, as "vid/pid/bcdDevice" in unpadded lowercase hex.
+bool LinuxPowerMonitor::isOurRemoval(udev_device* dev) const {
+    const char* product = udev_device_get_property_value(dev, "PRODUCT");
+    if (!product) return false;
+
+    char prefix[16];
+    std::snprintf(prefix, sizeof(prefix), "%x/%x/", vid_, pid_);
+    return std::strncmp(product, prefix, std::strlen(prefix)) == 0;
+}
+
+// Arrivals are taken from hidraw, so the node the transport opens exists by
+// the time they are reported. Removals are taken from the usb_device.
 void LinuxPowerMonitor::drainDeviceEvents() {
     while (udev_device* dev = udev_monitor_receive_device(deviceWatch_)) {
-        const char* action = udev_device_get_action(dev);
+        const char* action    = udev_device_get_action(dev);
+        const char* subsystem = udev_device_get_subsystem(dev);
 
-        if (action && std::strcmp(action, "add") == 0 && isOurDevice(dev)) {
-            std::cout << "[monitor] ESP32 appeared\n";
-            if (onDeviceChange_) {
-                try { onDeviceChange_(true); } catch (...) {}
+        if (action && subsystem) {
+            const bool hidraw = std::strcmp(subsystem, "hidraw") == 0;
+
+            if (hidraw && std::strcmp(action, "add") == 0 && isOurDevice(dev)) {
+                std::cout << "[monitor] ESP32 appeared\n";
+                if (onDeviceChange_) {
+                    try { onDeviceChange_(true); } catch (...) {}
+                }
+            } else if (!hidraw && std::strcmp(action, "remove") == 0 && isOurRemoval(dev)) {
+                std::cout << "[monitor] ESP32 removed\n";
+                if (onDeviceChange_) {
+                    try { onDeviceChange_(false); } catch (...) {}
+                }
             }
         }
 

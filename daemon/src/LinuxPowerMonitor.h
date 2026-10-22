@@ -36,6 +36,7 @@ private:
     void stopDeviceWatch();
     void drainDeviceEvents();
     bool isOurDevice(udev_device* dev) const;
+    bool isOurRemoval(udev_device* dev) const;
     void resetDevice();
 
     std::unique_ptr<sdbus::IConnection> connection_;

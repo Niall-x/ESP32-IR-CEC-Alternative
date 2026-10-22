@@ -90,7 +90,7 @@
 
             package = lib.mkOption {
               type = lib.types.package;
-              default = self.packages.${pkgs.system}.esp32-ir-daemon;
+              default = self.packages.${pkgs.stdenv.hostPlatform.system}.esp32-ir-daemon;
               defaultText = lib.literalExpression "esp32-ir-daemon";
               description = "The daemon package to run.";
             };

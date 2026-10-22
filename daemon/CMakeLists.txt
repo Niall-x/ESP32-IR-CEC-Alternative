@@ -100,7 +100,15 @@ if(UNIX AND NOT APPLE)
 
     # Literal `lib`, never lib64: udev and systemd only read lib. Relative, so
     # CPack can rebase them when staging a package. The cost is that a hand
-    # install must pass -DCMAKE_INSTALL_PREFIX=/usr.
+    # install must pass -DCMAKE_INSTALL_PREFIX=/usr, so say so at the moment
+    # of the mistake rather than after an install that silently half-works.
+    if(CMAKE_INSTALL_PREFIX STREQUAL "/usr/local")
+        message(WARNING
+            "CMAKE_INSTALL_PREFIX is /usr/local. The udev rule and the systemd "
+            "unit would go under /usr/local/lib, where neither udev nor systemd "
+            "looks: the install would succeed and the daemon could not open the "
+            "stick. Reconfigure with -DCMAKE_INSTALL_PREFIX=/usr.")
+    endif()
     install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/99-esp32-ir-remote.rules
             DESTINATION lib/udev/rules.d)
 

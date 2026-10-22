@@ -53,7 +53,7 @@ firmware/          the stick: src/, data/ (the web page), platformio.ini
 daemon/            the PC side: src/, packaging/, CMakeLists.txt
 hardware/          FreeCAD enclosure and part models
 tools/hid-test/    a bare HID echo, for a board that will not talk at all
-.github/workflows/ compiles the daemon on every push; packages on a v* tag
+.github/workflows/ builds the daemon and firmware on every push; packages on a v* tag
 ```
 
 - `VERSION` is at the root because both halves share one protocol and ship
@@ -141,7 +141,9 @@ slowing down sleep or shutdown.
 
 ## 4. The firmware (`firmware/`)
 
-About 1,200 lines.
+About 1,200 lines, on Arduino core 3.3.12 (PlatformIO `espressif32` 8.0.0,
+ESP-IDF 5.5). Every platform and library version is pinned in
+`platformio.ini`; bump them deliberately, then re-test on hardware.
 
 | File | Does |
 |---|---|
@@ -191,6 +193,12 @@ Each save writes a temporary file, checks it was written in full, then swaps it
 in. The size check catches a save cut short by full flash or lost power;
 without it, a half-written file would replace a good one and every saved code
 would be gone.
+
+**Flash layout.** `firmware/partitions.csv` has one 2.5 MB app slot rather than
+the default table's two of 1.25 MB: there are no over-the-air updates, and on
+core 3.x the firmware alone fills 97% of 1.25 MB. The filesystem keeps the
+default table's offset and size, so sticks flashed with the old table keep
+their profiles. Never move it.
 
 ### Discrete codes, not toggles
 
@@ -258,7 +266,7 @@ With "display always on" set, every press switches.
 Shows the active profile, then blanks after 2 seconds unless "display always
 on" is set. Also shows `TV On` / `TV Off` when a command arrives,
 `Not Configured` when a profile has no code, the two hold bars, and in WiFi
-mode the address to browse to.
+mode the network name, password and address.
 
 Each bar has one block per second held, worked out from the hold times, so the
 hold bar has 4 blocks and the reset bar 9. Neither ever fills completely: the
@@ -266,11 +274,25 @@ moment it would, the screen changes instead, and that is the signal.
 
 ### WiFi setup mode
 
-Hold the button 4–7 s and the stick starts its own WiFi network, `ESP32-IR-Remote`
-(password `irremote123`). The page at the address on the screen can add, edit,
-delete and reorder profiles, choose the active one, toggle "display always on",
+Hold the button 4–7 s and the stick starts its own WiFi network,
+`ESP32-IR-Remote-XXXX`, where `XXXX` comes from the chip's MAC address so two
+sticks never share a name. The page at `http://192.168.4.1` can add, edit,
+delete profiles, choose the active one, toggle "display always on",
 and factory reset. It is stored in the stick's flash and uploaded with
 `pio run -t uploadfs`. IR keeps working while setup mode is on.
+
+**The password is random per stick** and shown on the screen. It is generated
+on first boot from the hardware RNG, with its entropy source switched on for
+the purpose (the radio is off at boot, and without it the RNG is only
+pseudo-random), and saved in `settings.json`. A factory reset picks a new one.
+Eight characters from an alphabet without look-alikes (no `0`/`O`, `1`/`l`) is
+about 40 bits, plenty for a network that only exists while somebody is standing
+at the stick. A stick with no screen cannot show it, so it falls back to
+`irremote123`, which the README documents.
+
+Because `settings.json` now holds that password, the web server serves only
+`index.html` from flash; profiles and settings are reached through the API,
+which never returns the password.
 
 ### Recovering on its own
 
@@ -279,24 +301,33 @@ chip restarts itself. A hung stick looks exactly like an unplugged one to the
 PC, so without this a hang would last until somebody noticed. A restart loses
 nothing: profiles are in flash, and the daemon reconnects on its next command.
 20 s is set by the web server, which can legitimately stall ~12 s on a slow
-browser; everything else takes under 200 ms. The watchdog starts after setup,
-so first-boot flash formatting never has to beat it.
+browser; everything else takes under 200 ms. Core 3.x starts the watchdog
+itself with a 5 s timeout; `setup()` lengthens it and puts `loop()` under it,
+and the core feeds it after every `loop()`. That happens last in `setup()`, so
+first-boot flash formatting never has to beat it.
 
-**USB after sleep.** The stick's USB side freezes across a sleep unless the PC
-resets it on wake: it accepts nothing until it is replugged. Whether a PC does
-that depends on the port. On the test machine the chipset's ports reset every
-device on resume and the CPU's ports do not, so moving the stick between them
-turned working wakes into failed ones. On Linux the daemon resets the stick
-itself on every wake, which makes every port behave like the ones that work.
-The firmware's own recovery cannot help: it waits for a resume event this
-Arduino core never delivers. The Windows installer stops Windows suspending the
-idle stick at all (§5); whether a Windows sleep freezes it is untested.
+**Commands cross threads through a queue.** USB reports arrive on the USB task
+and are handled in `loop()`. A FreeRTOS queue carries them, rather than a
+shared buffer and a flag, which two cores could see half-written.
+
+**USB after sleep.** On Arduino core 2.x the stick's USB side froze across a
+sleep unless the PC reset it on wake: it accepted nothing until it was
+replugged. Whether a PC does that depends on the port. On the test machine the
+chipset's ports reset every device on resume and the CPU's ports do not, so
+moving the stick between them turned working wakes into failed ones. Core 2.x
+used TinyUSB 0.16's `dcd_esp32sx` driver, which never enables the wake-up
+interrupt, so the firmware was never told the bus had resumed; the recovery it
+had for this never ran. Core 3.x uses TinyUSB 0.21 and the rewritten `dcd_dwc2`
+driver, and the old recovery is gone with it. Whether the new stack survives a
+plain resume is the first thing to test on it (§8). Until that is known the
+Linux daemon still resets the stick on every wake (§5). The Windows installer
+stops Windows suspending the idle stick at all.
 
 ---
 
 ## 5. The daemon (`daemon/`)
 
-About 1,400 lines of C++, one program, built with CMake. Two small interfaces
+About 1,500 lines of C++, one program, built with CMake. Two small interfaces
 keep the platforms apart:
 
 - **Transport** — "send this command; did it work?" One implementation
@@ -327,6 +358,21 @@ waiting is event-driven, with no timer.
 PC has been up for under 3 minutes, checked at start-up and again when the stick
 arrives. So a package upgrade restarting the service at 3 a.m. does not turn
 the TV on, and neither does replugging the stick a week later.
+
+**Unplugging** is reported by udev too, and drops the open handle at once, so
+the next command opens the stick afresh instead of failing on a dead handle
+first. The arrival is taken from the `hidraw` node, which is what the transport
+opens; the removal from the `usb_device`, because by then the sysfs entries an
+arrival is matched on are gone, and only the event's own `PRODUCT` property
+still names the stick.
+
+**Reset on wake.** Before the `ON` at wake the daemon issues a USB reset
+(`USBDEVFS_RESET`) to the stick, the same thing the ports that worked were
+doing as part of resuming. It was added for the core 2.x firmware, which froze
+across a sleep without it (§4), and it needs the `usb_device` node: the udev
+rule gives the `esp32ir` group that node as well as the `hidraw` one, and the
+unit allows `char-usb_device`. If the core 3.x firmware survives a plain
+resume, the reset, the extra rule and the extra device permission all go.
 
 **The service's sandbox must allow `AF_NETLINK`**, the socket type udev uses.
 Without it, only the boot `ON` is lost — sleep, wake and shutdown all still
@@ -431,8 +477,11 @@ would make a lock necessary.
   unit file and the NixOS module (§5).
 - The firmware builds with `ARDUINO_USB_MODE=0`. At `1` the stick shows up as a
   serial port and the daemon never finds it.
-- The flash partition table is named explicitly, so a toolchain update can
-  never move the stored profiles.
+- The firmware uses its own partition table, and the filesystem partition in it
+  never moves (`0x290000`, `0x160000` long). Moving it loses every stick's
+  profiles on the next flash.
+- `lib_ldf_mode = deep` stays in both `platformio.ini` files. The default
+  finder misses the `FS` library core 3.x needs, and the build fails.
 - Never name a PowerShell variable `$Pid`: PowerShell reserves `$PID`, and the
   script fails.
 
@@ -448,7 +497,8 @@ What the README does not cover:
   that has systemd, which the daemon needs anyway.
 - **A hand install must use `-DCMAKE_INSTALL_PREFIX=/usr`.** The default,
   `/usr/local`, puts the udev rule and service file where udev and systemd never
-  look. The install "succeeds" and nothing works. (Packages are unaffected.)
+  look. The install "succeeds" and nothing works, so CMake warns when it sees
+  `/usr/local`. (Packages are unaffected.)
 - **Four routes, one build.** `.deb` and `.rpm` are built by GitHub Actions on
   a `v*` tag. Arch builds from `daemon/packaging/PKGBUILD` on the user's
   machine. NixOS uses the flake's module. All four run the same
@@ -476,6 +526,10 @@ What the README does not cover:
 - The uptime guard works both ways.
 - A profile with no code: nothing sent, `Not Configured` on screen.
 - Idle cost of the daemon: no measurable CPU.
+- **Wake on a port that resumes without a reset** (2026-10-22, core 2.x
+  firmware): the stick froze on every such wake until the daemon started
+  resetting it. With the reset, the `ON` was acknowledged in the same second as
+  the wake.
 
 **If the boot `ON` ever goes missing, read the log first.** `Watching udev for
 the ESP32` means it is working. `udev watch unavailable` means only sleep, wake
@@ -497,6 +551,27 @@ and it changed after that testing. To re-test, in this order:
 4. **Normal sleep and wake:** 2 s is enough.
 5. **Boot with Fast Startup on** (the default): the TV comes on.
 6. **Replug later on:** the TV does not change.
+7. **Wake on a USB port that does not reset its devices** (§4, "USB after
+   sleep"). The Windows daemon has no reset on wake, so on core 2.x firmware
+   this froze the stick. Only worth testing if the core 3.x firmware still
+   freezes on Linux without the reset.
+
+### Firmware on Arduino core 3.x: built, not yet run
+
+Moved from core 2.0.17 to 3.3.12 on 2026-10-22, along with every library. It
+compiles warning-free; nothing has run on a stick yet. In this order:
+
+1. **A plain resume.** Stop the daemon so nothing resets the stick, sleep and
+   wake, then send `ON`. An `ACK` means the new USB stack survives a resume,
+   and the daemon's reset on wake (§5) can go. No reply means it stays, and
+   Windows needs an equivalent.
+2. **The everyday cycle** with the daemon running: boot, sleep, wake, shutdown.
+3. **Unplug and replug:** the log shows `ESP32 removed` and `ESP32 appeared`,
+   and the next command needs no retry.
+4. **Setup mode:** the screen shows the network, password and address; the page
+   loads, saves, and exits. Settings saved by the old firmware are kept and
+   gain a password.
+5. **The watchdog** still restarts a stuck stick (core 3.x arms it differently).
 
 ### Not verified
 
@@ -511,11 +586,10 @@ Things that are wrong or missing now and easy not to notice:
 
 | Gap | Severity |
 |---|---|
-| **Before any stick goes to someone else:** it still uses the shared test USB ID (§2), and every stick has the same WiFi password. The password should come from the chip ID and show on the screen. | Medium |
+| **Before any stick goes to someone else:** it still uses the shared test USB ID (§2). | Medium |
 | **Only the LG codes are proven.** Samsung, Sony and Toshiba have never been tried on a real TV (§4). | Medium |
-| **Any `v*` tag publishes a public release**, and nothing checks anything first. | Medium |
+| **Any `v*` tag publishes a public release** once every build passes. Nothing beyond compiling is checked. | Medium |
 | **The Windows service runs as LocalSystem**, the most privileged account. Linux runs unprivileged. | Medium |
-| **A hand install without `-DCMAKE_INSTALL_PREFIX=/usr` silently half-works** (§7). A CMake warning would catch it at the moment of the mistake. | Medium |
 
 ---
 
@@ -535,7 +609,6 @@ below are improvements, not blockers.
    LocalService. The installer already prepares the log folder for it; the open
    question is whether that account can open the stick, which is very likely.
    Test with `sc.exe config esp32-ir-remote obj= "NT AUTHORITY\LocalService"`.
-4. **Build the firmware in CI.** Today CI only compiles the daemon.
 
 **Worth considering: an IR receiver.** A ~£1 VS1838B on one more pin would let
 the web page "learn" codes: point your remote at the stick and press power. The
@@ -575,9 +648,9 @@ Things that look removable, improvable or missing, and are not. Read before
   real ID arrives it changes once and never again. Generating it would mean
   build steps in PlatformIO, CMake and PowerShell for a one-time edit; the
   table in §2 is enough.
-- **The web server may serve `profiles.json` directly.** The setup page already
-  hands out the same data through `/api/profiles`, so blocking the file would
-  protect nothing.
+- **The web server serves only `index.html` from flash.** `settings.json` holds
+  the setup password, and the page needs nothing else; profiles and settings
+  go through the API (§4).
 - **Linux follows power state, not the screen** (2026-09-26). The two ways to
   watch the screen were both rejected:
   - *Read the display power state from the kernel.* Works on every desktop, but

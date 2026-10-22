@@ -1,6 +1,9 @@
 #include "Profiles.h"
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <WiFi.h>
+#include "bootloader_random.h"
+#include "esp_random.h"
 
 struct DefaultProfile {
     const char* name;
@@ -22,7 +25,35 @@ static const DefaultProfile DEFAULT_PROFILES[] = {
 static const Settings DEFAULT_SETTINGS = {
     .activeProfile   = 0,
     .displayAlwaysOn = false,
+    .wifiPassword    = "",
 };
+
+static constexpr size_t WIFI_PASSWORD_LENGTH = 8;
+
+// Read off a 128x32 screen, so no characters that look alike (0/O, 1/l/I).
+// 8 of 31 symbols is about 40 bits, plenty for a network that is only up
+// while somebody is standing at the stick.
+static String generateWifiPassword() {
+    static const char ALPHABET[] = "abcdefghjkmnpqrstuvwxyz23456789";
+
+    // The RNG is only truly random while the radio or this entropy source is
+    // on. The source must not be switched on under a running radio, which a
+    // factory reset from the setup page does; the radio is enough then.
+    const bool radioOff = WiFi.getMode() == WIFI_OFF;
+    if (radioOff) bootloader_random_enable();
+
+    String pass;
+    for (size_t i = 0; i < WIFI_PASSWORD_LENGTH; i++) {
+        pass += ALPHABET[esp_random() % (sizeof(ALPHABET) - 1)];
+    }
+
+    if (radioOff) bootloader_random_disable();
+    return pass;
+}
+
+static bool validWifiPassword(const String& p) {
+    return p.length() >= WIFI_PASSWORD_LENGTH;
+}
 
 static std::vector<Profile> profiles_;
 static Settings              settings_;
@@ -87,11 +118,18 @@ static void writeDefaultProfiles() {
     writeJsonAtomic("/profiles.json", doc);
 }
 
-static void writeDefaultSettings() {
+static bool writeSettings(const Settings& s) {
     JsonDocument doc;
-    doc["active_profile"]    = DEFAULT_SETTINGS.activeProfile;
-    doc["display_always_on"] = DEFAULT_SETTINGS.displayAlwaysOn;
-    writeJsonAtomic("/settings.json", doc);
+    doc["active_profile"]    = s.activeProfile;
+    doc["display_always_on"] = s.displayAlwaysOn;
+    doc["wifi_password"]     = s.wifiPassword;
+    return writeJsonAtomic("/settings.json", doc);
+}
+
+static void writeDefaultSettings() {
+    Settings s = DEFAULT_SETTINGS;
+    s.wifiPassword = generateWifiPassword();
+    writeSettings(s);
 }
 
 static void loadProfiles() {
@@ -138,6 +176,7 @@ static void loadSettings() {
 
     settings_.activeProfile   = doc["active_profile"]    | DEFAULT_SETTINGS.activeProfile;
     settings_.displayAlwaysOn = doc["display_always_on"] | DEFAULT_SETTINGS.displayAlwaysOn;
+    settings_.wifiPassword    = doc["wifi_password"]     | "";
 
     if (settings_.activeProfile < 0 ||
         settings_.activeProfile >= (int)profiles_.size()) {
@@ -149,6 +188,9 @@ namespace Profiles {
 bool begin() {
     if (!LittleFS.begin(true)) {
         Serial.println("[profiles] LittleFS mount failed — running on fallback profile");
+        // Never an open setup network: a password for this boot only.
+        settings_ = DEFAULT_SETTINGS;
+        settings_.wifiPassword = generateWifiPassword();
         return false;
     }
 
@@ -170,6 +212,13 @@ bool begin() {
     }
 
     loadSettings();
+
+    // Settings saved before the password existed, or a damaged file.
+    if (!validWifiPassword(settings_.wifiPassword)) {
+        Serial.println("[profiles] No WiFi password stored — generating one");
+        settings_.wifiPassword = generateWifiPassword();
+        writeSettings(settings_);
+    }
 
     Serial.printf("[profiles] Active profile: %d (%s)\n",
                   settings_.activeProfile,
@@ -227,11 +276,7 @@ void saveProfiles() {
 }
 
 void saveSettings() {
-    JsonDocument doc;
-    doc["active_profile"]    = settings_.activeProfile;
-    doc["display_always_on"] = settings_.displayAlwaysOn;
-
-    if (writeJsonAtomic("/settings.json", doc)) {
+    if (writeSettings(settings_)) {
         Serial.println("[profiles] Saved settings.json");
     }
 }
@@ -247,8 +292,8 @@ void factoryReset() {
 
 void toJson(const Profile& p, JsonObject obj) {
     char onBuf[11], offBuf[11];
-    snprintf(onBuf,  sizeof(onBuf),  "0x%08X", p.onCode);
-    snprintf(offBuf, sizeof(offBuf), "0x%08X", p.offCode);
+    snprintf(onBuf,  sizeof(onBuf),  "0x%08" PRIX32, p.onCode);
+    snprintf(offBuf, sizeof(offBuf), "0x%08" PRIX32, p.offCode);
 
     obj["name"]     = p.name;
     obj["protocol"] = protocolToString(p.protocol);

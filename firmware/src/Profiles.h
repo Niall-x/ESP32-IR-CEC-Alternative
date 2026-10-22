@@ -19,8 +19,10 @@ struct Profile {
 };
 
 struct Settings {
-    int  activeProfile;
-    bool displayAlwaysOn;
+    int    activeProfile;
+    bool   displayAlwaysOn;
+    // The setup network's password, random per stick and shown on the screen.
+    String wifiPassword;
 };
 
 namespace Profiles {

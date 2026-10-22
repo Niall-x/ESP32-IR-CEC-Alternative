@@ -52,7 +52,7 @@ Working and in daily use, but not yet released — read this before relying on i
 |---|---|
 | **ESP32-S3 SuperMini** | Must be an S3 or S2 — native USB is required. A classic ESP32, ESP8266 or C3 **will not work** |
 | **KY-005 IR LED module** | Any 940nm IR LED module. A bare LED with a resistor works too |
-| **SSD1306 OLED, 128×32, I²C** | Optional but recommended — it is how you see which profile is active |
+| **SSD1306 OLED, 128×32, I²C** | Optional but recommended — it is how you see which profile is active, and the setup WiFi password |
 | **Momentary push button** | Any. Wired to ground; the internal pull-up is used |
 
 ### Wiring
@@ -95,9 +95,9 @@ and do not leave it automatically afterwards — if the device does not reappear
 after `upload`, press reset or replug it.
 
 > **`uploadfs` erases saved profiles.** It rewrites the whole filesystem, so any
-> IR codes you have entered are lost and the defaults come back. That is useful
-> for a clean slate and unwelcome otherwise. Firmware-only updates (`upload`)
-> leave your profiles alone.
+> IR codes you have entered are lost, the defaults come back, and the stick picks
+> a new setup WiFi password. That is useful for a clean slate and unwelcome
+> otherwise. Firmware-only updates (`upload`) leave your profiles alone.
 
 ---
 
@@ -207,7 +207,7 @@ One button, four gestures, by how long you hold it:
 | ~1–4 s | Nothing — a bar fills, one block per second. Let go to cancel |
 | **4–7 s** | **Enter or leave wireless config mode** |
 | 7–16 s | Nothing — the reset bar fills. Let go to cancel |
-| **Past 16 s** | **Factory reset** — restores the default profiles |
+| **Past 16 s** | **Factory reset** — restores the default profiles and picks a new setup WiFi password |
 
 When the screen is off, the first tap only wakes it; the *next* tap changes
 profile. That stops a blind press in the dark silently switching TVs.
@@ -220,11 +220,16 @@ seconds unless you turn on "display always on" in the web UI.
 
 ### Configuring it
 
-Hold the button for 4–7 seconds. The stick starts its own WiFi access point:
+Hold the button for 4–7 seconds. The stick starts its own WiFi access point and
+puts everything you need to connect on its screen:
 
-- **Network:** `ESP32-IR-Remote`
-- **Password:** `irremote123`
-- **Address:** shown on the OLED
+- **Network:** `ESP32-IR-Remote-XXXX`, where `XXXX` is unique to the stick
+- **Password:** eight random characters, chosen by the stick the first time it
+  starts and kept until a factory reset
+- **Address:** `http://192.168.4.1`
+
+A stick built without the screen cannot show its password, so it uses
+`irremote123` instead.
 
 Connect and open that address in a browser. You can add, edit and delete TV
 profiles, set the active one, toggle the always-on display, and factory reset.

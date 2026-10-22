@@ -184,8 +184,11 @@ void Display::setWifiActive(bool active) {
     wifiActive_ = active;
 }
 
-void Display::setWifiIP(const String& ip) {
-    wifiIP_ = ip;
+void Display::setWifiInfo(const String& ssid, const String& password,
+                          const String& ip) {
+    wifiSsid_     = ssid;
+    wifiPassword_ = password;
+    wifiIP_       = ip;
 }
 
 void Display::resetBarCache() {
@@ -200,15 +203,21 @@ void Display::drawStatus(const String& profileName) {
     oled_.setTextSize(1);
     oled_.setTextColor(SSD1306_WHITE);
 
+    // Everything needed to connect, one line each: network, password, address.
     if (wifiActive_) {
         oled_.setCursor(0, 0);
         oled_.print("Profile: ");
         oled_.print(profileName);
 
-        oled_.setCursor(0, 11);
-        oled_.print("WiFi: Active");
+        oled_.setCursor(0, 8);
+        oled_.print(wifiSsid_);
 
-        oled_.setCursor(0, 22);
+        oled_.setCursor(0, 16);
+        oled_.print("Pass: ");
+        oled_.print(wifiPassword_);
+
+        oled_.setCursor(0, 24);
+        oled_.print("http://");
         oled_.print(wifiIP_);
     } else {
         oled_.setCursor(0, 12);

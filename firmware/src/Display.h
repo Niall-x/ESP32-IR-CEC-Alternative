@@ -15,6 +15,9 @@ public:
     void begin();
     void update();
 
+    // False when no screen answered at start-up.
+    bool present() const { return ok_; }
+
     void showStatus(const String& profileName, bool alwaysOn);
 
     void showIRConfirm(bool on, bool alwaysOn, const String& profileName);
@@ -33,12 +36,14 @@ public:
 
     void setWifiActive(bool active);
 
-    void setWifiIP(const String& ip);
+    void setWifiInfo(const String& ssid, const String& password, const String& ip);
 
 private:
     Adafruit_SSD1306& oled_;
     bool              ok_         = false;
     bool              wifiActive_ = false;
+    String            wifiSsid_;
+    String            wifiPassword_;
     String            wifiIP_;
 
     bool     timerActive_   = false;
