@@ -1,7 +1,11 @@
 #include "LinuxPowerMonitor.h"
 
+#include <fcntl.h>
 #include <libudev.h>
+#include <linux/usbdevice_fs.h>
 #include <poll.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
 
 #include <cerrno>
 #include <cstdio>
@@ -134,6 +138,61 @@ bool LinuxPowerMonitor::isOurDevice(udev_device* dev) const {
     return std::strcmp(product, expected) == 0;
 }
 
+// The stick's USB side freezes across a sleep unless the PC resets it on wake.
+// Some ports do that as part of resuming and some resume the stick as it was,
+// which leaves it accepting nothing until it is replugged. Verified on hardware:
+// a frozen stick timed out every write, then ACKed straight after one reset.
+// Resetting on every wake makes all ports behave like the ones that work.
+void LinuxPowerMonitor::resetDevice() {
+    udev* ctx = udev_new();
+    if (!ctx) {
+        std::cerr << "[monitor] udev_new() failed — ESP32 not reset\n";
+        return;
+    }
+
+    char vendor[8];
+    char product[8];
+    std::snprintf(vendor, sizeof(vendor), "%04x", vid_);
+    std::snprintf(product, sizeof(product), "%04x", pid_);
+
+    udev_enumerate* found = udev_enumerate_new(ctx);
+    udev_enumerate_add_match_subsystem(found, "usb");
+    udev_enumerate_add_match_property(found, "DEVTYPE", "usb_device");
+    udev_enumerate_add_match_sysattr(found, "idVendor", vendor);
+    udev_enumerate_add_match_sysattr(found, "idProduct", product);
+    udev_enumerate_scan_devices(found);
+
+    udev_list_entry* first = udev_enumerate_get_list_entry(found);
+    udev_device* dev = first
+        ? udev_device_new_from_syspath(ctx, udev_list_entry_get_name(first))
+        : nullptr;
+    const char* node = dev ? udev_device_get_devnode(dev) : nullptr;
+
+    if (!node) {
+        std::cout << "[monitor] ESP32 not present — nothing to reset\n";
+    } else {
+        const int fd = ::open(node, O_WRONLY | O_CLOEXEC);
+        if (fd < 0) {
+            std::cerr << "[monitor] Could not open " << node << " to reset the ESP32 ("
+                      << std::strerror(errno) << "). Check the udev rule gives the"
+                         " esp32ir group the usb_device node, and the unit's"
+                         " DeviceAllow includes char-usb_device.\n";
+        } else {
+            if (::ioctl(fd, USBDEVFS_RESET, 0) < 0) {
+                std::cerr << "[monitor] USB reset of the ESP32 failed ("
+                          << std::strerror(errno) << ")\n";
+            } else {
+                std::cout << "[monitor] ESP32 reset after wake\n";
+            }
+            ::close(fd);
+        }
+    }
+
+    if (dev) udev_device_unref(dev);
+    udev_enumerate_unref(found);
+    udev_unref(ctx);
+}
+
 void LinuxPowerMonitor::drainDeviceEvents() {
     while (udev_device* dev = udev_monitor_receive_device(deviceWatch_)) {
         const char* action = udev_device_get_action(dev);
@@ -215,6 +274,7 @@ void LinuxPowerMonitor::onPrepareForSleep(bool start) {
         releaseInhibitorLock();
     } else {
         std::cout << "[event] Woke up\n";
+        resetDevice();
         assertTv(true, "wake");
         takeInhibitorLock();
     }

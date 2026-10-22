@@ -34,8 +34,10 @@ SystemCallArchitectures=native
 # AF_UNIX for D-Bus; AF_NETLINK for the udev watch. Without AF_NETLINK nothing
 # fails loudly: the daemon starts, logs one line, and loses the ON at boot.
 RestrictAddressFamilies=AF_UNIX AF_NETLINK
-# Limits device access to hidraw plus the standard pseudo-devices.
+# Limits device access to hidraw, usb_device (for the reset on wake) and the
+# standard pseudo-devices.
 DeviceAllow=char-hidraw rw
+DeviceAllow=char-usb_device rw
 
 [Install]
 WantedBy=multi-user.target

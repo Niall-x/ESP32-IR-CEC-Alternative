@@ -282,9 +282,15 @@ nothing: profiles are in flash, and the daemon reconnects on its next command.
 browser; everything else takes under 200 ms. The watchdog starts after setup,
 so first-boot flash formatting never has to beat it.
 
-**USB after sleep.** When the PC suspends the USB port and resumes it, the stick
-disconnects and reconnects itself, so it never stays half-awake. The Windows
-installer also stops Windows suspending the idle stick at all (§5).
+**USB after sleep.** The stick's USB side freezes across a sleep unless the PC
+resets it on wake: it accepts nothing until it is replugged. Whether a PC does
+that depends on the port. On the test machine the chipset's ports reset every
+device on resume and the CPU's ports do not, so moving the stick between them
+turned working wakes into failed ones. On Linux the daemon resets the stick
+itself on every wake, which makes every port behave like the ones that work.
+The firmware's own recovery cannot help: it waits for a resume event this
+Arduino core never delivers. The Windows installer stops Windows suspending the
+idle stick at all (§5); whether a Windows sleep freezes it is untested.
 
 ---
 
