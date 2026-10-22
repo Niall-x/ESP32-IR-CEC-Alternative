@@ -16,7 +16,7 @@ esp32-ir-remote is installed but not enabled. To start it:
     sudo systemctl enable --now esp32-ir-remote
 
 The udev rule only applies on a device add event, so replug the ESP32 (or run
-`sudo udevadm trigger --subsystem-match=hidraw --subsystem-match=usb --action=add`) if it is already
+`sudo udevadm trigger --subsystem-match=hidraw --action=add`) if it is already
 connected. Check with `ls -l /dev/hidraw*` — the node should be group esp32ir.
 
 EOF

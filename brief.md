@@ -317,11 +317,17 @@ chipset's ports reset every device on resume and the CPU's ports do not, so
 moving the stick between them turned working wakes into failed ones. Core 2.x
 used TinyUSB 0.16's `dcd_esp32sx` driver, which never enables the wake-up
 interrupt, so the firmware was never told the bus had resumed; the recovery it
-had for this never ran. Core 3.x uses TinyUSB 0.21 and the rewritten `dcd_dwc2`
-driver, and the old recovery is gone with it. Whether the new stack survives a
-plain resume is the first thing to test on it (§8). Until that is known the
-Linux daemon still resets the stick on every wake (§5). The Windows installer
-stops Windows suspending the idle stick at all.
+had for this never ran. For a while the Linux daemon reset the stick on every
+wake to cover it.
+
+Core 3.x uses TinyUSB 0.21 and the rewritten `dcd_dwc2` driver, and **survives a
+plain resume** (verified 2026-10-22: daemon stopped, so nothing reset the stick;
+slept and woke twice on the port that used to freeze it; `ON` acknowledged both
+times). So nothing works around it any more: the firmware's recovery, the
+daemon's reset, and the extra udev rule and device permission the reset needed
+are all gone. The Windows installer still stops Windows suspending the idle
+stick; with core 3.x that is no longer needed, but it stays until a Windows
+machine has shown the stick surviving an idle suspend (§8).
 
 ---
 
@@ -365,14 +371,6 @@ first. The arrival is taken from the `hidraw` node, which is what the transport
 opens; the removal from the `usb_device`, because by then the sysfs entries an
 arrival is matched on are gone, and only the event's own `PRODUCT` property
 still names the stick.
-
-**Reset on wake.** Before the `ON` at wake the daemon issues a USB reset
-(`USBDEVFS_RESET`) to the stick, the same thing the ports that worked were
-doing as part of resuming. It was added for the core 2.x firmware, which froze
-across a sleep without it (§4), and it needs the `usb_device` node: the udev
-rule gives the `esp32ir` group that node as well as the `hidraw` one, and the
-unit allows `char-usb_device`. If the core 3.x firmware survives a plain
-resume, the reset, the extra rule and the extra device permission all go.
 
 **The service's sandbox must allow `AF_NETLINK`**, the socket type udev uses.
 Without it, only the boot `ON` is lost — sleep, wake and shutdown all still
@@ -526,10 +524,8 @@ What the README does not cover:
 - The uptime guard works both ways.
 - A profile with no code: nothing sent, `Not Configured` on screen.
 - Idle cost of the daemon: no measurable CPU.
-- **Wake on a port that resumes without a reset** (2026-10-22, core 2.x
-  firmware): the stick froze on every such wake until the daemon started
-  resetting it. With the reset, the `ON` was acknowledged in the same second as
-  the wake.
+- **Wake on a port that resumes without a reset** (2026-10-22): the core 2.x
+  firmware froze on every such wake; the core 3.x firmware does not (§4).
 
 **If the boot `ON` ever goes missing, read the log first.** `Watching udev for
 the ESP32` means it is working. `udev watch unavailable` means only sleep, wake
@@ -551,27 +547,24 @@ and it changed after that testing. To re-test, in this order:
 4. **Normal sleep and wake:** 2 s is enough.
 5. **Boot with Fast Startup on** (the default): the TV comes on.
 6. **Replug later on:** the TV does not change.
-7. **Wake on a USB port that does not reset its devices** (§4, "USB after
-   sleep"). The Windows daemon has no reset on wake, so on core 2.x firmware
-   this froze the stick. Only worth testing if the core 3.x firmware still
-   freezes on Linux without the reset.
+7. **Idle USB suspend.** Re-run the installer with its selective-suspend step
+   removed, leave the stick idle past Windows' suspend timeout, then sleep and
+   wake. If the TV still follows, that step goes too (§4, "USB after sleep").
 
-### Firmware on Arduino core 3.x: built, not yet run
+### Firmware on Arduino core 3.x
 
-Moved from core 2.0.17 to 3.3.12 on 2026-10-22, along with every library. It
-compiles warning-free; nothing has run on a stick yet. In this order:
+Moved from core 2.0.17 to 3.3.12 on 2026-10-22, along with every library.
+Verified on the stick the same day, on Linux:
 
-1. **A plain resume.** Stop the daemon so nothing resets the stick, sleep and
-   wake, then send `ON`. An `ACK` means the new USB stack survives a resume,
-   and the daemon's reset on wake (§5) can go. No reply means it stays, and
-   Windows needs an equivalent.
-2. **The everyday cycle** with the daemon running: boot, sleep, wake, shutdown.
-3. **Unplug and replug:** the log shows `ESP32 removed` and `ESP32 appeared`,
-   and the next command needs no retry.
-4. **Setup mode:** the screen shows the network, password and address; the page
-   loads, saves, and exits. Settings saved by the old firmware are kept and
-   gain a password.
-5. **The watchdog** still restarts a stuck stick (core 3.x arms it differently).
+- A plain USB resume, with nothing resetting the stick (§4).
+- Sleep and wake with the daemon running, on the port that used to freeze it.
+- Unplug and replug: the log shows `ESP32 removed`, the handle is dropped, then
+  `ESP32 appeared`.
+- Setup mode: the screen shows the network, password and address, and the page
+  loads, saves and exits.
+
+Not yet run on core 3.x: boot and shutdown, and the watchdog restarting a
+stuck stick (core 3.x arms it differently).
 
 ### Not verified
 

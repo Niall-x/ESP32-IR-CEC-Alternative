@@ -162,10 +162,11 @@ New-ItemProperty -Path $key -Name "PreshutdownTimeout" `
 
 # --- USB selective suspend --------------------------------------------------
 #
-# Stops Windows suspending the idle stick while the PC is awake: firmware built
-# on Arduino core 2.x froze after any USB suspend until it was replugged (see
-# the brief, "USB after sleep"). Per device instance, so a different physical
-# stick needs the installer re-run.
+# Stops Windows suspending the idle stick while the PC is awake. Firmware built
+# on Arduino core 2.x froze after any USB suspend until it was replugged; core
+# 3.x does not, so this goes once a Windows machine has confirmed it (see the
+# brief, "USB after sleep"). Per device instance, so a different physical stick
+# needs the installer re-run.
 function Disable-UsbSelectiveSuspend {
     param([string]$VendorHex, [string]$ProductHex)
 

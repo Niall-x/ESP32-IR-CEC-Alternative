@@ -135,7 +135,7 @@
                 SystemCallArchitectures = "native";
                 # AF_NETLINK is needed by the udev watch; see the unit file.
                 RestrictAddressFamilies = [ "AF_UNIX" "AF_NETLINK" ];
-                DeviceAllow = [ "char-hidraw rw" "char-usb_device rw" ];
+                DeviceAllow = [ "char-hidraw rw" ];
               };
             };
           };

@@ -1,11 +1,9 @@
 # Gives the esp32ir group access to the stick, so the daemon can run
-# unprivileged. hidraw nodes are root-only by default. The hidraw node carries
-# the commands; the usb_device node lets the daemon reset the stick on wake.
+# unprivileged. hidraw nodes are root-only by default.
 #
 # 1209:0001 is a shared test ID (see the brief). It is one of five copies that
-# must change together; lowercase hex, no 0x, on both lines.
+# must change together; lowercase hex, no 0x.
 #
 # Applies on device add, so after installing, replug the stick or run:
 #   sudo udevadm control --reload-rules && sudo udevadm trigger
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", GROUP="esp32ir", MODE="0660"
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1209", ATTR{idProduct}=="0001", GROUP="esp32ir", MODE="0660"

@@ -128,7 +128,7 @@ sudo groupadd --system esp32ir
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin \
              --gid esp32ir esp32ir
 sudo udevadm control --reload-rules
-sudo udevadm trigger --subsystem-match=hidraw --subsystem-match=usb --action=add
+sudo udevadm trigger --subsystem-match=hidraw --action=add
 sudo systemctl enable --now esp32-ir-remote
 ```
 
